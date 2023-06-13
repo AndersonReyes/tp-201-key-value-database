@@ -1,6 +1,6 @@
 use clap::{command, Parser, Subcommand};
 
-use kvs::{InMemoryStorage, KvStore};
+use kvs::{DBResult, InMemoryStorage, KvStore};
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -25,27 +25,22 @@ enum Operation {
     },
 }
 
-fn main() -> Result<(), clap::Error> {
-    let store: KvStore<InMemoryStorage> = KvStore::new();
+fn main() -> DBResult<()> {
+    let mut store: KvStore<InMemoryStorage> = KvStore::new();
     let args = Cli::parse();
 
     match &args.operation {
-        Some(Operation::Get { key: _ }) => {
-            // let v = store.get(key.clone());
-            eprintln!("unimplemented");
-            std::process::exit(-1);
+        Some(Operation::Get { key }) => {
+            let g = store.get(key.to_string());
+            g.map(|v| println!("{}", v));
         }
 
-        Some(Operation::Set { key: _, value: _ }) => {
-            // let v = store.get(key.clone());
-            eprintln!("unimplemented");
-            std::process::exit(-1);
+        Some(Operation::Set { key, value }) => {
+            store.set(key.to_string(), value.to_string())?;
         }
 
-        Some(Operation::Remove { key: _ }) => {
-            // let v = store.get(key.clone());
-            eprintln!("unimplemented");
-            std::process::exit(-1);
+        Some(Operation::Remove { key }) => {
+            store.remove(key.to_string())?;
         }
         _ => {
             eprintln!("Must provide an argument");
