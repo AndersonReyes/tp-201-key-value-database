@@ -1,5 +1,6 @@
 use clap::{command, Parser, Subcommand};
-use kvs::KvStore;
+
+use kvs::{InMemoryStorage, KvStore};
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -25,7 +26,7 @@ enum Operation {
 }
 
 fn main() -> Result<(), clap::Error> {
-    // let _store: KvStore<InMemoryStorage> = kvs::KvStore::new();
+    let store: KvStore<InMemoryStorage> = KvStore::new();
     let args = Cli::parse();
 
     match &args.operation {
