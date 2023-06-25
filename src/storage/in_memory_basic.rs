@@ -27,7 +27,7 @@ impl Storage for InMemoryStorage {
     type Key = String;
     type Value = String;
 
-    fn get(&self, key: &String) -> Option<String> {
+    fn get(&mut self, key: &String) -> Option<String> {
         self.storage.get(key).cloned()
     }
 
@@ -39,5 +39,9 @@ impl Storage for InMemoryStorage {
     fn remove(&mut self, key: &String) -> DBResult<()> {
         self.storage.remove(key);
         Ok(())
+    }
+
+    fn open(path: &std::path::Path) -> DBResult<Self> {
+        unimplemented!()
     }
 }

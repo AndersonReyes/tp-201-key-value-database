@@ -9,4 +9,4 @@ pub mod storage;
 
 pub use kvs::KvStore;
 pub use result::{DBResult, Error};
-pub use storage::{InMemoryStorage, Storage};
+pub use storage::{InMemoryStorage, LogStructured, Storage};

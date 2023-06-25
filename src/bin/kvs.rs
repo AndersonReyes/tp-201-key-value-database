@@ -1,6 +1,6 @@
 use clap::{command, Parser, Subcommand};
 
-use kvs::{DBResult, InMemoryStorage, KvStore};
+use kvs::{DBResult, Error, KvStore, LogStructured};
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -26,13 +26,17 @@ enum Operation {
 }
 
 fn main() -> DBResult<()> {
-    let mut store: KvStore<InMemoryStorage> = KvStore::new();
+    let mut store: KvStore<LogStructured> = KvStore::open(&*std::env::current_dir().unwrap())?;
     let args = Cli::parse();
 
     match &args.operation {
         Some(Operation::Get { key }) => {
             let g = store.get(key.to_string());
-            g.map(|v| println!("{}", v));
+
+            match g {
+                Some(v) => println!("{}", v),
+                None => println!("Key not found"),
+            }
         }
 
         Some(Operation::Set { key, value }) => {
@@ -40,7 +44,15 @@ fn main() -> DBResult<()> {
         }
 
         Some(Operation::Remove { key }) => {
-            store.remove(key.to_string())?;
+            match store.remove(key.to_string()) {
+                Ok(_) => {}
+                Err(e) => match e {
+                    Error::Storage(err) => {
+                        println!("{}", err);
+                        std::process::exit(-1);
+                    }
+                },
+            };
         }
         _ => {
             eprintln!("Must provide an argument");

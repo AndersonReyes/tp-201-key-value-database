@@ -6,31 +6,18 @@ pub struct KvStore<T> {
     storage: T,
 }
 
-impl<T> Default for KvStore<T>
-where
-    T: Storage + Default,
-{
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl<T> KvStore<T>
 where
     T: Storage,
 {
-    /// Create new store, in memory by default
-    pub fn new() -> Self
-    where
-        T: Default,
-    {
-        Self {
-            storage: T::default(),
-        }
+    /// Create new store from file
+    pub fn open(path: &std::path::Path) -> DBResult<KvStore<T>> {
+        let storage = T::open(path)?;
+        Ok(Self { storage })
     }
 
     /// Get value for key
-    pub fn get(&self, key: T::Key) -> Option<T::Value> {
+    pub fn get(&mut self, key: T::Key) -> Option<T::Value> {
         self.storage.get(&key)
     }
 
