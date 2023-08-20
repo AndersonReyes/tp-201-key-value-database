@@ -9,9 +9,10 @@ use serde_json::Result;
 
 use crate::{DBResult, Error, Storage};
 
+// TODO: implement more compact serialization? Right now we use ndjson
+
 struct LogPointer {
     offset: u64,
-    size: usize,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -77,7 +78,6 @@ impl LogStructured {
 
         let pointer: LogPointer = LogPointer {
             offset: curr_offset - (serialized.len() as u64) - 1,
-            size: serialized.len(),
         };
         match entry {
             LogEntry::Set { key, .. } => self.index.insert(key, pointer),
@@ -87,6 +87,7 @@ impl LogStructured {
         Ok(())
     }
 
+    /// looks for entry in the index and then reads from disk if not exist
     fn find(&mut self, key_to_find: &String) -> Result<Option<LogEntry>> {
         let result = self.index.get(key_to_find).and_then(|pointer| {
             let mut reader = io::BufReader::new(&self.reader);
@@ -118,6 +119,7 @@ impl LogStructured {
         Ok(result)
     }
 
+    /// populates local index from the log
     fn hydrate(&mut self) -> Result<()> {
         self.reader
             .seek(SeekFrom::Start(0))
@@ -128,22 +130,10 @@ impl LogStructured {
         for line_result in io::BufReader::new(&self.reader).lines() {
             let line = line_result.expect("Failed to read line");
             match serde_json::from_str(&line).expect("Failed to parse line") {
-                LogEntry::Set { key, .. } => self.index.insert(
-                    key,
-                    LogPointer {
-                        offset,
-                        size: line.len() + 1, // + newline char
-                    },
-                ),
-                LogEntry::Remove { key } => self.index.insert(
-                    key,
-                    LogPointer {
-                        offset,
-                        size: line.len() + 1, // + newline char
-                    },
-                ),
+                LogEntry::Set { key, .. } => self.index.insert(key, LogPointer { offset }),
+                LogEntry::Remove { key } => self.index.remove(&key),
             };
-            offset += line.len() as u64;
+            offset += line.len() as u64 + 1; // + 1 is for newline char
         }
 
         Ok(())
