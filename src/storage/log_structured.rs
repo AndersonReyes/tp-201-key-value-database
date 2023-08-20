@@ -1,12 +1,18 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io;
 use std::io::prelude::*;
 use std::io::SeekFrom;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Result, Value};
+use serde_json::Result;
 
 use crate::{DBResult, Error, Storage};
+
+struct LogPointer {
+    offset: u64,
+    size: usize,
+}
 
 #[derive(Serialize, Deserialize, Debug)]
 #[serde(tag = "type")]
@@ -23,10 +29,11 @@ enum LogEntry {
 
 /// Uses log based storage
 pub struct LogStructured {
-    data_dir: String,
+    // data_dir: String,
     writer: File,
     reader: File,
-    debug: File,
+    // debug: File,
+    index: HashMap<String, LogPointer>,
 }
 
 impl LogStructured {
@@ -34,7 +41,7 @@ impl LogStructured {
         let log_path = path.join("log.json");
 
         Self {
-            data_dir: path.to_path_buf().into_os_string().into_string().unwrap(),
+            // data_dir: path.to_path_buf().into_os_string().into_string().unwrap(),
             writer: File::options()
                 .append(true)
                 .create(true)
@@ -45,48 +52,101 @@ impl LogStructured {
                 .write(false)
                 .open(log_path)
                 .expect("failed to open db reader"),
-            debug: File::options()
-                .append(true)
-                .read(false)
-                .create(true)
-                .open(path.join("debug.log"))
-                .expect("failed to open db debug logger"),
+            // debug: File::options()
+            //     .append(true)
+            //     .read(false)
+            //     .create(true)
+            //     .open(path.join("debug.log"))
+            //     .expect("failed to open db debug logger"),
+            index: HashMap::new(),
         }
     }
 
-    fn append(&mut self, entry: LogEntry) -> DBResult<usize> {
+    /// Adds entry to log and returns entry offset in the log
+    fn append(&mut self, entry: LogEntry) -> DBResult<()> {
         let serialized =
             serde_json::to_string(&entry).map_err(|e| Error::Storage(e.to_string()))?;
 
-        // let offset = self.writer.seek(SeekFrom::Current(0)).expect("failed to get current pointer") + serialized.len() ;
-        match writeln!(&mut self.writer, "{}", serialized) {
-            Ok(_) => Ok(serialized.len()),
-            Err(_) => Err(Error::Storage("Failed to write to log".to_string())),
-        }
+        writeln!(&mut self.writer, "{}", serialized)
+            .map_err(|_| Error::Storage("Failed to write to log".to_string()))?;
+
+        let curr_offset = self
+            .writer
+            .seek(SeekFrom::Current(0))
+            .map_err(|e| Error::Storage(e.to_string()))?;
+
+        let pointer: LogPointer = LogPointer {
+            offset: curr_offset - (serialized.len() as u64) - 1,
+            size: serialized.len(),
+        };
+        match entry {
+            LogEntry::Set { key, .. } => self.index.insert(key, pointer),
+            LogEntry::Remove { key, .. } => self.index.insert(key, pointer),
+        };
+
+        Ok(())
     }
 
-    fn replay(&mut self, key_to_find: &String) -> DBResult<Option<String>> {
-        self.reader
-            .seek(SeekFrom::Start(0))
-            .map_err(|e| Error::Storage(e.to_string()))?;
-        let mut result = None;
-        for lineResult in io::BufReader::new(&self.reader).lines() {
-            let line = lineResult.map_err(|e| Error::Storage(e.to_string()))?;
-            match serde_json::from_str(&line).map_err(|e| Error::Storage(e.to_string()))? {
+    fn find(&mut self, key_to_find: &String) -> Result<Option<LogEntry>> {
+        let result = self.index.get(key_to_find).and_then(|pointer| {
+            let mut reader = io::BufReader::new(&self.reader);
+            reader.seek(SeekFrom::Start((*pointer).offset)).unwrap();
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            line = line.trim_end_matches('\n').to_string();
+
+            match serde_json::from_str(&line).expect("Failed to parse LogEntry") {
                 LogEntry::Set { key, value } => {
-                    if key_to_find == &key {
-                        result = Some(value);
-                    }
+                    assert_eq!(
+                        key,
+                        key_to_find.to_string(),
+                        "Offset doesn't match expected key"
+                    );
+                    Some(LogEntry::Set { key, value })
                 }
                 LogEntry::Remove { key } => {
-                    if key_to_find == &key {
-                        result = None;
-                    }
+                    assert_eq!(
+                        key,
+                        key_to_find.to_string(),
+                        "Offset doesn't match expected key"
+                    );
+                    Some(LogEntry::Remove { key })
                 }
             }
-        }
+        });
 
         Ok(result)
+    }
+
+    fn hydrate(&mut self) -> Result<()> {
+        self.reader
+            .seek(SeekFrom::Start(0))
+            .map_err(|e| Error::Storage(e.to_string()))
+            .expect("Failed to seek");
+
+        let mut offset: u64 = 0;
+        for line_result in io::BufReader::new(&self.reader).lines() {
+            let line = line_result.expect("Failed to read line");
+            match serde_json::from_str(&line).expect("Failed to parse line") {
+                LogEntry::Set { key, .. } => self.index.insert(
+                    key,
+                    LogPointer {
+                        offset,
+                        size: line.len() + 1, // + newline char
+                    },
+                ),
+                LogEntry::Remove { key } => self.index.insert(
+                    key,
+                    LogPointer {
+                        offset,
+                        size: line.len() + 1, // + newline char
+                    },
+                ),
+            };
+            offset += line.len() as u64;
+        }
+
+        Ok(())
     }
 }
 
@@ -95,18 +155,12 @@ impl Storage for LogStructured {
     type Value = String;
 
     fn get(&mut self, key: &Self::Key) -> Option<Self::Value> {
-        match self.replay(key) {
-            Err(e) => {
-                match e {
-                    Error::Storage(e) => {
-                        writeln!(&mut self.debug, "get() error: {}", e)
-                            .expect("writing to debug logger");
-                    }
-                }
-                None
-            }
-            Ok(v) => v,
-        }
+        self.find(key)
+            .expect("Error looking for key")
+            .and_then(|e| match e {
+                LogEntry::Set { value, .. } => Some(value),
+                LogEntry::Remove { .. } => None,
+            })
     }
 
     fn set(&mut self, key: Self::Key, value: Self::Value) -> DBResult<()> {
@@ -124,6 +178,8 @@ impl Storage for LogStructured {
     }
 
     fn open(path: &std::path::Path) -> DBResult<Self> {
-        Ok(LogStructured::new(path))
+        let mut storage = LogStructured::new(path);
+        storage.hydrate().expect("Failed to hydrate db");
+        Ok(storage)
     }
 }

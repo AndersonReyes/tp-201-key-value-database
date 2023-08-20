@@ -41,7 +41,7 @@ impl Storage for InMemoryStorage {
         Ok(())
     }
 
-    fn open(path: &std::path::Path) -> DBResult<Self> {
+    fn open(_path: &std::path::Path) -> DBResult<Self> {
         unimplemented!()
     }
 }

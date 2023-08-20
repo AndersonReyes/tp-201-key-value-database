@@ -1,10 +1,12 @@
+use std::process::Command;
+
 use assert_cmd::prelude::*;
-use kvs::{DBResult, InMemoryStorage, KvStore, LogStructured};
 use predicates::ord::eq;
 use predicates::str::{contains, is_empty, PredicateStrExt};
-use std::process::Command;
 use tempfile::TempDir;
 use walkdir::WalkDir;
+
+use kvs::{DBResult, KvStore, LogStructured};
 
 // `kvs` with no args should exit with a non-zero code.
 #[test]

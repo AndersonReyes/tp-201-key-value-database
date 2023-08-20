@@ -1,5 +1,5 @@
 use crate::result::DBResult;
-use crate::{InMemoryStorage, Storage};
+use crate::Storage;
 
 /// key value store, uses in memory storage for now
 pub struct KvStore<T> {
