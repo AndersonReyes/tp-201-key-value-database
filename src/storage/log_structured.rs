@@ -11,7 +11,7 @@ use serde_json::Result;
 
 use crate::{DBResult, Error, Storage};
 
-// TODO: implement more compact serialization? Right now we use ndjson but maybe raw bytes is better
+const COMPACTION_SIZE_TRIGGER_KB: u64 = 1_000 * 40;
 
 #[derive(Debug)]
 struct LogPointer {
@@ -96,10 +96,9 @@ impl LogStructured {
     /// 1. get all the file offsets we need from the index
     /// 2. Copy those entries to a temp file
     /// 3. rotate temp file as main log file
-    /// TODO: can compaction be done in place?
     fn compaction(&mut self) -> DBResult<()> {
         // don't compact until 10kb or 10k byte size
-        if self.reader.metadata().unwrap().len() <= 40_000 {
+        if self.reader.metadata().unwrap().len() <= COMPACTION_SIZE_TRIGGER_KB {
             return Ok(());
         }
 
@@ -118,8 +117,6 @@ impl LogStructured {
                 .expect("[COMPACTION] expected valid log pointer");
 
             let log_pointer = LogStructured::append_to_writer(&mut new_writer, &entry)?;
-            // TODO: updated self.index here could be bad if there is an error, new log point to
-            // failed file
             match entry {
                 LogEntry::Set { key, .. } => self.index.insert(key, log_pointer),
                 LogEntry::Remove { key, .. } => self.index.insert(key, log_pointer),
@@ -200,7 +197,7 @@ impl Storage for LogStructured {
         }
     }
 
-    fn open(path: &std::path::Path) -> DBResult<Self> {
+    fn open(path: &Path) -> DBResult<Self> {
         let mut storage = LogStructured::new(path);
         storage
             .hydrate()
