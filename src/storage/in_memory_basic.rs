@@ -24,7 +24,7 @@ impl InMemoryStorage {
 }
 
 impl Storage for InMemoryStorage {
-    fn get(&mut self, key: &str) -> Option<String> {
+    fn get(&self, key: &str) -> Option<String> {
         self.storage.get(key).cloned()
     }
 

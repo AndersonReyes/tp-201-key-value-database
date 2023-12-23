@@ -3,7 +3,7 @@ use crate::result::DBResult;
 /// Generic trait that abstracts over the db storage
 pub trait Storage {
     /// Get value for key
-    fn get(&mut self, key: &str) -> Option<String>;
+    fn get(&self, key: &str) -> Option<String>;
     /// set value with key
     fn set(&mut self, key: String, value: String) -> DBResult<()>;
     /// remove entry with key
