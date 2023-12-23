@@ -70,7 +70,7 @@ fn cli_get_stored() -> DBResult<()> {
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
     store.set("key1".to_owned(), "value1".to_owned())?;
     store.set("key2".to_owned(), "value2".to_owned())?;
-    assert_eq!(store.get("key1".to_owned()), Some("value1".to_owned()));
+    assert_eq!(store.get("key1"), Some("value1".to_owned()));
     drop(store);
 
     Command::cargo_bin("kvs")
@@ -189,14 +189,14 @@ fn get_stored_value() -> DBResult<()> {
     store.set("key1".to_owned(), "value1".to_owned())?;
     store.set("key2".to_owned(), "value2".to_owned())?;
 
-    assert_eq!(store.get("key1".to_owned()), Some("value1".to_owned()));
-    assert_eq!(store.get("key2".to_owned()), Some("value2".to_owned()));
+    assert_eq!(store.get("key1"), Some("value1".to_owned()));
+    assert_eq!(store.get("key2"), Some("value2".to_owned()));
 
     // Open from disk again and check persistent data.
     drop(store);
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
-    assert_eq!(store.get("key1".to_owned()), Some("value1".to_owned()));
-    assert_eq!(store.get("key2".to_owned()), Some("value2".to_owned()));
+    assert_eq!(store.get("key1"), Some("value1".to_owned()));
+    assert_eq!(store.get("key2"), Some("value2".to_owned()));
 
     Ok(())
 }
@@ -208,16 +208,16 @@ fn overwrite_value() -> DBResult<()> {
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
 
     store.set("key1".to_owned(), "value1".to_owned())?;
-    assert_eq!(store.get("key1".to_owned()), Some("value1".to_owned()));
+    assert_eq!(store.get("key1"), Some("value1".to_owned()));
     store.set("key1".to_owned(), "value2".to_owned())?;
-    assert_eq!(store.get("key1".to_owned()), Some("value2".to_owned()));
+    assert_eq!(store.get("key1"), Some("value2".to_owned()));
 
     // Open from disk again and check persistent data.
     drop(store);
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
-    assert_eq!(store.get("key1".to_owned()), Some("value2".to_owned()));
+    assert_eq!(store.get("key1"), Some("value2".to_owned()));
     store.set("key1".to_owned(), "value3".to_owned())?;
-    assert_eq!(store.get("key1".to_owned()), Some("value3".to_owned()));
+    assert_eq!(store.get("key1"), Some("value3".to_owned()));
 
     Ok(())
 }
@@ -229,12 +229,12 @@ fn get_non_existent_value() -> DBResult<()> {
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
 
     store.set("key1".to_owned(), "value1".to_owned())?;
-    assert_eq!(store.get("key2".to_owned()), None);
+    assert_eq!(store.get("key2"), None);
 
     // Open from disk again and check persistent data.
     drop(store);
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
-    assert_eq!(store.get("key2".to_owned()), None);
+    assert_eq!(store.get("key2"), None);
 
     Ok(())
 }
@@ -243,7 +243,7 @@ fn get_non_existent_value() -> DBResult<()> {
 fn remove_non_existent_key() -> DBResult<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
-    assert!(store.remove("key1".to_owned()).is_err());
+    assert!(store.remove("key1").is_err());
     Ok(())
 }
 
@@ -252,8 +252,8 @@ fn remove_key() -> DBResult<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
     store.set("key1".to_owned(), "value1".to_owned())?;
-    assert!(store.remove("key1".to_owned()).is_ok());
-    assert_eq!(store.get("key1".to_owned()), None);
+    assert!(store.remove("key1").is_ok());
+    assert_eq!(store.get("key1"), None);
     Ok(())
 }
 
@@ -295,7 +295,7 @@ fn compaction() -> DBResult<()> {
         let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
         for key_id in 0..1000 {
             let key = format!("key{}", key_id);
-            assert_eq!(store.get(key), Some(format!("{}", iter)));
+            assert_eq!(store.get(&key), Some(format!("{}", iter)));
         }
         return Ok(());
     }

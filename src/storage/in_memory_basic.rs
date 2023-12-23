@@ -24,10 +24,7 @@ impl InMemoryStorage {
 }
 
 impl Storage for InMemoryStorage {
-    type Key = String;
-    type Value = String;
-
-    fn get(&mut self, key: &String) -> Option<String> {
+    fn get(&mut self, key: &str) -> Option<String> {
         self.storage.get(key).cloned()
     }
 
@@ -36,7 +33,7 @@ impl Storage for InMemoryStorage {
         Ok(())
     }
 
-    fn remove(&mut self, key: &String) -> DBResult<()> {
+    fn remove(&mut self, key: &str) -> DBResult<()> {
         self.storage.remove(key);
         Ok(())
     }

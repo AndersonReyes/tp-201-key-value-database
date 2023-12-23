@@ -31,7 +31,7 @@ fn main() -> DBResult<()> {
 
     match &args.operation {
         Some(Operation::Get { key }) => {
-            let g = store.get(key.to_string());
+            let g = store.get(key);
 
             match g {
                 Some(v) => println!("{}", v),
@@ -44,7 +44,7 @@ fn main() -> DBResult<()> {
         }
 
         Some(Operation::Remove { key }) => {
-            match store.remove(key.to_string()) {
+            match store.remove(key) {
                 Ok(_) => {}
                 Err(e) => match e {
                     Error::Storage(err) => {

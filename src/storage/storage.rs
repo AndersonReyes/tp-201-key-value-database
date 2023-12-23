@@ -2,17 +2,12 @@ use crate::result::DBResult;
 
 /// Generic trait that abstracts over the db storage
 pub trait Storage {
-    /// typf of key
-    type Key;
-    /// Type of value
-    type Value;
-
     /// Get value for key
-    fn get(&mut self, key: &Self::Key) -> Option<Self::Value>;
+    fn get(&mut self, key: &str) -> Option<String>;
     /// set value with key
-    fn set(&mut self, key: Self::Key, value: Self::Value) -> DBResult<()>;
+    fn set(&mut self, key: String, value: String) -> DBResult<()>;
     /// remove entry with key
-    fn remove(&mut self, key: &Self::Key) -> DBResult<()>;
+    fn remove(&mut self, key: &str) -> DBResult<()>;
 
     /// open storage from file if supported
     fn open(path: &std::path::Path) -> DBResult<Self>

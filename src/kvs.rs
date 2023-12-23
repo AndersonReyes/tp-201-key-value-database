@@ -17,17 +17,17 @@ where
     }
 
     /// Get value for key
-    pub fn get(&mut self, key: T::Key) -> Option<T::Value> {
-        self.storage.get(&key)
+    pub fn get(&mut self, key: &str) -> Option<String> {
+        self.storage.get(key)
     }
 
     /// set value with key
-    pub fn set(&mut self, key: T::Key, value: T::Value) -> DBResult<()> {
+    pub fn set(&mut self, key: String, value: String) -> DBResult<()> {
         self.storage.set(key, value)
     }
 
     /// set value with key
-    pub fn remove(&mut self, key: T::Key) -> DBResult<()> {
-        self.storage.remove(&key)
+    pub fn remove(&mut self, key: &str) -> DBResult<()> {
+        self.storage.remove(key)
     }
 }

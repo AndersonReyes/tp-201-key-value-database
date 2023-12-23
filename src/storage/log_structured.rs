@@ -88,32 +88,15 @@ impl LogStructured {
     }
 
     /// looks for entry in the index and then reads from disk if not exist
-    fn find(&mut self, key_to_find: &String) -> Result<Option<LogEntry>> {
+    fn find(&mut self, key_to_find: &str) -> Result<Option<LogEntry>> {
         let result = self.index.get(key_to_find).and_then(|pointer| {
             let mut reader = io::BufReader::new(&self.reader);
             reader.seek(SeekFrom::Start((*pointer).offset)).unwrap();
             let mut line = String::new();
             reader.read_line(&mut line).unwrap();
             line = line.trim_end_matches('\n').to_string();
-
-            match serde_json::from_str(&line).expect("Failed to parse LogEntry") {
-                LogEntry::Set { key, value } => {
-                    assert_eq!(
-                        key,
-                        key_to_find.to_string(),
-                        "Offset doesn't match expected key"
-                    );
-                    Some(LogEntry::Set { key, value })
-                }
-                LogEntry::Remove { key } => {
-                    assert_eq!(
-                        key,
-                        key_to_find.to_string(),
-                        "Offset doesn't match expected key"
-                    );
-                    Some(LogEntry::Remove { key })
-                }
-            }
+            
+            serde_json::from_str(&line).expect("Failed to parse LogEntry")
         });
 
         Ok(result)
@@ -141,28 +124,31 @@ impl LogStructured {
 }
 
 impl Storage for LogStructured {
-    type Key = String;
-    type Value = String;
-
-    fn get(&mut self, key: &Self::Key) -> Option<Self::Value> {
-        self.find(key)
+    fn get(&mut self, key: &str) -> Option<String> {
+        let string: Option<String> = self
+            .find(key)
+            // TODO: this expect should happen if the log entry is remove type???
             .expect("Error looking for key")
             .and_then(|e| match e {
                 LogEntry::Set { value, .. } => Some(value),
                 LogEntry::Remove { .. } => None,
-            })
+            });
+
+        string
     }
 
-    fn set(&mut self, key: Self::Key, value: Self::Value) -> DBResult<()> {
+    fn set(&mut self, key: String, value: String) -> DBResult<()> {
         self.append(LogEntry::Set { key, value })?;
         Ok(())
     }
 
-    fn remove(&mut self, key: &Self::Key) -> DBResult<()> {
+    fn remove(&mut self, key: &str) -> DBResult<()> {
         match self.get(key) {
             None => Err(Error::Storage("Key not found".to_string())),
             Some(_) => self
-                .append(LogEntry::Remove { key: key.clone() })
+                .append(LogEntry::Remove {
+                    key: key.to_string(),
+                })
                 .map(|_| ()),
         }
     }
