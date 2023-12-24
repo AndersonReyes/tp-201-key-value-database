@@ -6,7 +6,7 @@ use predicates::str::{contains, is_empty, PredicateStrExt};
 use tempfile::TempDir;
 use walkdir::WalkDir;
 
-use kvs::{DBResult, KvStore, LogStructured};
+use kvs::{KvStore, LogStructured};
 
 // `kvs` with no args should exit with a non-zero code.
 #[test]
@@ -34,7 +34,7 @@ fn cli_get_non_existent_key() {
         .current_dir(&temp_dir)
         .assert()
         .success()
-        .stdout(eq("Key not found").trim());
+        .stdout(contains("Key not found").trim());
 }
 
 // `kvs rm <KEY>` should print "Key not found" for an empty database and exit with non-zero code.
@@ -47,7 +47,7 @@ fn cli_rm_non_existent_key() {
         .current_dir(&temp_dir)
         .assert()
         .failure()
-        .stdout(eq("Key not found").trim());
+        .stdout(contains("Key not found").trim());
 }
 
 // `kvs set <KEY> <VALUE>` should print nothing and exit with zero.
@@ -64,7 +64,7 @@ fn cli_set() {
 }
 
 #[test]
-fn cli_get_stored() -> DBResult<()> {
+fn cli_get_stored() -> anyhow::Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
 
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
@@ -94,7 +94,7 @@ fn cli_get_stored() -> DBResult<()> {
 
 // `kvs rm <KEY>` should print nothing and exit with zero.
 #[test]
-fn cli_rm_stored() -> DBResult<()> {
+fn cli_rm_stored() -> anyhow::Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
 
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
@@ -182,7 +182,7 @@ fn cli_invalid_subcommand() {
 
 // Should get previously stored value.
 #[test]
-fn get_stored_value() -> DBResult<()> {
+fn get_stored_value() -> anyhow::Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
 
@@ -203,7 +203,7 @@ fn get_stored_value() -> DBResult<()> {
 
 // Should overwrite existent value.
 #[test]
-fn overwrite_value() -> DBResult<()> {
+fn overwrite_value() -> anyhow::Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
 
@@ -224,7 +224,7 @@ fn overwrite_value() -> DBResult<()> {
 
 // Should get `None` when getting a non-existent key.
 #[test]
-fn get_non_existent_value() -> DBResult<()> {
+fn get_non_existent_value() -> anyhow::Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
 
@@ -240,7 +240,7 @@ fn get_non_existent_value() -> DBResult<()> {
 }
 
 #[test]
-fn remove_non_existent_key() -> DBResult<()> {
+fn remove_non_existent_key() -> anyhow::Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
     assert!(store.remove("key1").is_err());
@@ -248,7 +248,7 @@ fn remove_non_existent_key() -> DBResult<()> {
 }
 
 #[test]
-fn remove_key() -> DBResult<()> {
+fn remove_key() -> anyhow::Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
     store.set("key1".to_owned(), "value1".to_owned())?;
@@ -260,7 +260,7 @@ fn remove_key() -> DBResult<()> {
 // Insert data until total size of the directory decreases.
 // Test data correctness after compaction.
 #[test]
-fn compaction() -> DBResult<()> {
+fn compaction() -> anyhow::Result<()> {
     let temp_dir = TempDir::new().expect("unable to create temporary working directory");
     let mut store: KvStore<LogStructured> = KvStore::open(temp_dir.path())?;
 

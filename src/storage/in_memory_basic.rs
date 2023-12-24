@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 
-use crate::result::DBResult;
 use crate::storage::Storage;
 
 /// In memory db storage. Good for testing only
@@ -28,17 +27,17 @@ impl Storage for InMemoryStorage {
         self.storage.get(key).cloned()
     }
 
-    fn set(&mut self, key: String, value: String) -> DBResult<()> {
+    fn set(&mut self, key: String, value: String) -> anyhow::Result<()> {
         self.storage.insert(key, value);
         Ok(())
     }
 
-    fn remove(&mut self, key: &str) -> DBResult<()> {
+    fn remove(&mut self, key: &str) -> anyhow::Result<()> {
         self.storage.remove(key);
         Ok(())
     }
 
-    fn open(_path: &std::path::Path) -> DBResult<Self> {
+    fn open(_path: &std::path::Path) -> anyhow::Result<Self> {
         unimplemented!()
     }
 }

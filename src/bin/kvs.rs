@@ -1,6 +1,6 @@
 use clap::{command, Parser, Subcommand};
 
-use kvs::{DBResult, Error, KvStore, LogStructured};
+use kvs::{KvStore, LogStructured};
 
 /// Simple program to greet a person
 #[derive(Parser, Debug)]
@@ -25,7 +25,7 @@ enum Operation {
     },
 }
 
-fn main() -> DBResult<()> {
+fn main() -> anyhow::Result<()> {
     let mut store: KvStore<LogStructured> = KvStore::open(&*std::env::current_dir().unwrap())?;
     let args = Cli::parse();
 
@@ -46,12 +46,10 @@ fn main() -> DBResult<()> {
         Some(Operation::Remove { key }) => {
             match store.remove(key) {
                 Ok(_) => {}
-                Err(e) => match e {
-                    Error::Storage(err) => {
-                        println!("{}", err);
-                        std::process::exit(-1);
-                    }
-                },
+                Err(e) => {
+                    println!("{:?}", e);
+                    std::process::exit(-1);
+                }
             };
         }
         _ => {
