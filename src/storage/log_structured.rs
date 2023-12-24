@@ -1,4 +1,3 @@
-use crate::storage;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::DirEntry;
@@ -6,17 +5,17 @@ use std::fs::File;
 use std::io::prelude::*;
 use std::io::BufReader;
 use std::io::SeekFrom;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{anyhow, Context};
 use serde::{Deserialize, Serialize};
 
+use crate::storage;
 use crate::Storage;
 
-/// TODO: clean up the map to custom errors by implementing the From trait
-
-const COMPACTION_SIZE_TRIGGER_KB: u64 = 1_000 * 40;
+/// after this many operations, we compact the current log file
+const COMPACTION_OPS_THRESHOLD: u64 = 1024 * 3;
 
 #[derive(Debug)]
 struct LogPointer {
@@ -30,10 +29,13 @@ struct LogPointer {
 enum LogEntry {
     /// key value
     Set {
+        #[serde(rename = "k")]
         key: String,
+        #[serde(rename = "v")]
         value: String,
     },
     Remove {
+        #[serde(rename = "k")]
         key: String,
     },
 }
@@ -43,26 +45,32 @@ pub struct LogStructured {
     log_dir: String,
     main_log: String,
     index: HashMap<String, LogPointer>,
+    uncompacted: u64,
 }
 
 impl LogStructured {
-    fn new(path: &Path) -> Self {
-        let log_dir = path.join("log-files");
-        if !log_dir.exists() {
-            fs::create_dir(&log_dir).expect("failed to create log dir");
-        }
-        let log_path = log_dir.join(format!(
+    fn log_file_name(dir: &Path) -> PathBuf {
+        dir.join(format!(
             "{}.json",
             SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_millis()
-        ));
+        ))
+    }
+
+    fn new(path: &Path) -> Self {
+        let log_dir = path.join("log-files");
+        if !log_dir.exists() {
+            fs::create_dir(&log_dir).expect("failed to create log dir");
+        }
+        let log_path = LogStructured::log_file_name(&log_dir);
 
         Self {
             log_dir: log_dir.display().to_string(),
             main_log: log_path.display().to_string(),
             index: HashMap::new(),
+            uncompacted: 0,
         }
     }
 
@@ -108,41 +116,27 @@ impl LogStructured {
         Ok(())
     }
 
-    /// runs compaction.
-    /// Steps:
-    /// 1. get all the file offsets we need from the index
-    /// 2. Copy those entries to a temp file
-    /// 3. rotate temp file as main log file
-    fn compaction(&mut self) -> anyhow::Result<()> {
-        // // don't compact until 10kb or 10k byte size
-        // if self.reader.metadata().unwrap().len() <= COMPACTION_SIZE_TRIGGER_KB {
-        //     return Ok(());
-        // }
-        //
-        // let temp_path = format!("{}/log-{}.json", self.log_dir, Uuid::new_v4().to_string());
-        // let mut new_writer = File::options()
-        //     .append(true)
-        //     .create(true)
-        //     .open(Path::new(&temp_path))
-        //     .expect("failed to open db writer");
-        //
-        // let keys: Vec<String> = self.index.keys().cloned().collect();
-        // for key in keys {
-        //     let entry = self
-        //         .find(&key)
-        //         .map_err(|e| Error::Storage(e.to_string()))?
-        //         .expect("[COMPACTION] expected valid log pointer");
-        //
-        //     let log_pointer = self.append_to_writer(&entry)?;
-        //     match entry {
-        //         LogEntry::Set { key, .. } => self.index.insert(key, log_pointer),
-        //         LogEntry::Remove { key, .. } => self.index.insert(key, log_pointer),
-        //     };
-        // }
-        //
-        // std::fs::copy(&temp_path, &self.main_log).expect("[COMPACTION] Failed to rotate log");
-        // std::fs::remove_file(temp_path).expect("[COMPACTION] failed to remove temp file");
-        //
+    /// runs compaction on the current log file by moving the index to a new compacted file
+    fn ops_compaction(&mut self) -> anyhow::Result<()> {
+        if self.uncompacted <= COMPACTION_OPS_THRESHOLD {
+            return Ok(());
+        }
+
+        let old_log = self.main_log.to_string();
+        let new_path = LogStructured::log_file_name(&Path::new(&self.log_dir));
+        self.main_log = new_path.display().to_string();
+
+        let keys: Vec<String> = self.index.keys().cloned().collect();
+        for key in keys {
+            let entry = self
+                .find(&key)
+                .expect("[COMPACTION] expected valid log pointer");
+
+            self.append(entry)?;
+        }
+
+        fs::remove_file(old_log)?;
+        self.uncompacted = 0;
         Ok(())
     }
 
@@ -164,7 +158,9 @@ impl LogStructured {
         result
     }
 
-    /// populates local index from the log
+    /// populates local index from the log.
+    /// Walks through all the logs in the directory in order
+    /// and hydrates the index, keeping the last operation
     fn hydrate(&mut self) -> anyhow::Result<()> {
         let mut logs: Vec<DirEntry> = fs::read_dir(&Path::new(&self.log_dir))?
             .map(|e| e.expect("[HYDRATE] failed unwrap DirEntry"))
@@ -210,7 +206,8 @@ impl Storage for LogStructured {
 
     fn set(&mut self, key: String, value: String) -> anyhow::Result<()> {
         self.append(LogEntry::Set { key, value })?;
-        // self.compaction()?;
+        self.uncompacted += 1;
+        self.ops_compaction()?;
         Ok(())
     }
 
@@ -219,19 +216,18 @@ impl Storage for LogStructured {
             None => Err(anyhow!(storage::result::StorageError::KeyNotFound(
                 key.to_string()
             ))),
-            Some(_) => self
-                .append(LogEntry::Remove {
-                    key: key.to_string(),
-                })
-                .map(|_| ()),
-        }
+            Some(_) => self.append(LogEntry::Remove {
+                key: key.to_string(),
+            }),
+        }?;
+        self.uncompacted += 1;
+        self.ops_compaction()?;
+        Ok(())
     }
 
     fn open(path: &Path) -> anyhow::Result<Self> {
         let mut storage = LogStructured::new(path);
-        storage
-            .hydrate()
-            .expect("[LOG_STRUCTURED.OPEN] Failed to hydrate db");
+        storage.hydrate().with_context(|| "failed to hydrate db")?;
         Ok(storage)
     }
 }
