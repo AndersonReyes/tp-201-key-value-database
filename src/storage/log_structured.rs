@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::fs;
 use std::fs::DirEntry;
 use std::fs::File;
 use std::io::prelude::*;
@@ -7,6 +6,7 @@ use std::io::BufReader;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{fs, io};
 
 use anyhow::{anyhow, Context};
 use serde::{Deserialize, Serialize};
@@ -93,7 +93,7 @@ impl LogStructured {
     }
 
     /// Adds entry to log and returns entry offset in the log
-    fn append(&mut self, entry: LogEntry) -> anyhow::Result<()> {
+    fn append_to_log(&mut self, entry: LogEntry) -> anyhow::Result<LogPointer> {
         let serialized = serde_json::to_string(&entry)
             .with_context(|| format!("failed to serialize {:?}", &entry))?;
         let mut writer = self.write_append_file(&Path::new(&self.main_log))?;
@@ -102,18 +102,11 @@ impl LogStructured {
 
         let curr_offset = writer.seek(SeekFrom::Current(0))?;
 
-        let log_pointer: LogPointer = LogPointer {
+        Ok(LogPointer {
             offset: curr_offset - (serialized.len() as u64) - 1,
-            size: serialized.len(),
+            size: serialized.len() + 1, // new line char
             path: self.main_log.to_string(),
-        };
-
-        match entry {
-            LogEntry::Set { key, .. } => self.index.insert(key, log_pointer),
-            LogEntry::Remove { key, .. } => self.index.insert(key, log_pointer),
-        };
-
-        Ok(())
+        })
     }
 
     /// runs compaction on the current log file by moving the index to a new compacted file
@@ -126,13 +119,16 @@ impl LogStructured {
         let new_path = LogStructured::log_file_name(&Path::new(&self.log_dir));
         self.main_log = new_path.display().to_string();
 
-        let keys: Vec<String> = self.index.keys().cloned().collect();
-        for key in keys {
-            let entry = self
-                .find(&key)
-                .expect("[COMPACTION] expected valid log pointer");
+        let mut writer = self.write_append_file(&new_path)?;
 
-            self.append(entry)?;
+        for log_pointer in self.index.values() {
+            let mut reader = self.read_file(Path::new(&log_pointer.path))?;
+            if reader.seek(SeekFrom::Current(0))? != log_pointer.offset {
+                reader.seek(SeekFrom::Start(log_pointer.offset))?;
+            }
+            let mut entry_reader = reader.take(log_pointer.size as u64);
+            io::copy(&mut entry_reader, &mut writer)
+                .expect(&format!("failed to compact entry {:?}", log_pointer));
         }
 
         fs::remove_file(old_log)?;
@@ -141,21 +137,24 @@ impl LogStructured {
     }
 
     /// looks for entry in the index and then reads from disk if not exist
-    fn find(&self, key_to_find: &str) -> Option<LogEntry> {
-        let result = self.index.get(key_to_find).and_then(|pointer| {
-            let file = self.read_file(&Path::new(&pointer.path)).ok()?;
+    fn find(&self, log_pointer: &LogPointer) -> anyhow::Result<LogEntry> {
+        let file = self.read_file(&Path::new(&log_pointer.path))?;
+        let mut reader = BufReader::new(file);
+        reader.seek(SeekFrom::Start(log_pointer.offset))?;
 
-            let mut reader = BufReader::new(file);
-            reader.seek(SeekFrom::Start((*pointer).offset)).ok()?;
-            let mut line = String::new();
-            // TODO: maybe use the LogPointer::size here?
-            reader.read_line(&mut line).ok()?;
-            line = line.trim_end_matches('\n').to_string();
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        assert_eq!(
+            line.len(),
+            log_pointer.size,
+            "data corruption, expected line of size {} but got {} in {}",
+            log_pointer.size,
+            line.len(),
+            line
+        );
+        line.truncate(log_pointer.size);
 
-            serde_json::from_str(&line).ok()?
-        });
-
-        result
+        Ok(serde_json::from_str(&line).expect(&format!("failed to deserialize {line}")))
     }
 
     /// populates local index from the log.
@@ -175,7 +174,7 @@ impl LogStructured {
             let mut offset: u64 = 0;
             for line_result in BufReader::new(&reader).lines() {
                 let line = line_result?;
-                let size = line.len();
+                let size = line.len() + 1; // newline char
                 match serde_json::from_str(&line).expect("[HYDRATE] Failed to parse line") {
                     LogEntry::Set { key, .. } => self.index.insert(
                         key,
@@ -187,7 +186,7 @@ impl LogStructured {
                     ),
                     LogEntry::Remove { key } => self.index.remove(&key),
                 };
-                offset += size as u64 + 1; // + 1 is for newline char
+                offset += size as u64;
             }
         }
         Ok(())
@@ -196,38 +195,45 @@ impl LogStructured {
 
 impl Storage for LogStructured {
     fn get(&self, key: &str) -> Option<String> {
-        let string: Option<String> = self.find(key).and_then(|e| match e {
-            LogEntry::Set { value, .. } => Some(value),
-            LogEntry::Remove { .. } => None,
-        });
-
-        string
+        if let Some(LogEntry::Set { value, .. }) =
+            self.index.get(key).and_then(|p| self.find(p).ok())
+        {
+            Some(value)
+        } else {
+            None
+        }
     }
 
     fn set(&mut self, key: String, value: String) -> anyhow::Result<()> {
-        self.append(LogEntry::Set { key, value })?;
+        let log_pointer = self.append_to_log(LogEntry::Set {
+            key: key.clone(),
+            value,
+        })?;
+        self.index.insert(key, log_pointer);
         self.uncompacted += 1;
         self.ops_compaction()?;
         Ok(())
     }
 
     fn remove(&mut self, key: &str) -> anyhow::Result<()> {
-        match self.get(key) {
-            None => Err(anyhow!(storage::result::StorageError::KeyNotFound(
-                key.to_string()
-            ))),
-            Some(_) => self.append(LogEntry::Remove {
+        if let Some(_) = self.index.remove(key) {
+            self.append_to_log(LogEntry::Remove {
                 key: key.to_string(),
-            }),
-        }?;
-        self.uncompacted += 1;
-        self.ops_compaction()?;
-        Ok(())
+            })?;
+            self.uncompacted += 1;
+            self.ops_compaction()?;
+
+            Ok(())
+        } else {
+            Err(anyhow!(storage::result::StorageError::KeyNotFound(
+                key.to_string()
+            )))
+        }
     }
 
     fn open(path: &Path) -> anyhow::Result<Self> {
         let mut storage = LogStructured::new(path);
-        storage.hydrate().with_context(|| "failed to hydrate db")?;
+        storage.hydrate().expect("failed to hydrate db");
         Ok(storage)
     }
 }
