@@ -1,5 +1,5 @@
 /// Generic trait that abstracts over the db storage
-pub trait Storage {
+pub trait Engine {
     /// Get value for key
     fn get(&self, key: &str) -> Option<String>;
     /// set value with key

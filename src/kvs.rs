@@ -1,36 +1,38 @@
-use crate::Storage;
+use anyhow::Ok;
+
+use crate::Engine;
 
 /// key value store, uses in memory storage for now
-pub struct KvStore<T> {
-    durable_storage: T,
+pub struct KvStore<T: Engine> {
+    engine: T,
 }
 
-impl<T> KvStore<T>
-where
-    T: Storage,
-{
+impl<T: Engine> KvStore<T> {
+    /// Create new store using the specified engine
+    pub fn new(engine: T) -> anyhow::Result<Self> {
+        Ok(Self { engine })
+    }
+
     /// Create new store from file
-    pub fn open(path: &std::path::Path) -> anyhow::Result<KvStore<T>> {
-        let storage = T::open(path)?;
-        Ok(Self {
-            durable_storage: storage,
-        })
+    pub fn open(path: &std::path::Path) -> anyhow::Result<Self> {
+        let engine = T::open(path)?;
+        Ok(Self { engine })
     }
 
     /// Get value for key
     /// TODO: why does self need to be mut here?
-    pub fn get(&mut self, key: &str) -> Option<String> {
-        self.durable_storage.get(key)
+    pub fn get(&self, key: &str) -> Option<String> {
+        self.engine.get(key)
     }
 
     /// set value with key
     pub fn set(&mut self, key: String, value: String) -> anyhow::Result<()> {
-        self.durable_storage.set(key.clone(), value.clone())?;
+        self.engine.set(key.clone(), value.clone())?;
         Ok(())
     }
 
     /// set value with key
     pub fn remove(&mut self, key: &str) -> anyhow::Result<()> {
-        self.durable_storage.remove(key)
+        self.engine.remove(key)
     }
 }

@@ -12,7 +12,7 @@ use anyhow::{anyhow, Context};
 use serde::{Deserialize, Serialize};
 
 use crate::storage;
-use crate::Storage;
+use crate::Engine;
 
 /// after this many operations, we compact the current log file
 const COMPACTION_OPS_THRESHOLD: u64 = 1024 * 3;
@@ -193,7 +193,7 @@ impl LogStructured {
     }
 }
 
-impl Storage for LogStructured {
+impl Engine for LogStructured {
     fn get(&self, key: &str) -> Option<String> {
         if let Some(LogEntry::Set { value, .. }) =
             self.index.get(key).and_then(|p| self.find(p).ok())

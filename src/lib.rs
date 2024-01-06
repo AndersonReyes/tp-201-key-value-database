@@ -7,4 +7,4 @@ pub(crate) mod kvs;
 pub mod storage;
 
 pub use kvs::KvStore;
-pub use storage::{InMemoryStorage, LogStructured, Storage};
+pub use storage::{Engine, InMemoryStorage, LogStructured};

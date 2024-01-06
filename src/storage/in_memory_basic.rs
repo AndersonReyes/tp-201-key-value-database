@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::storage::Storage;
+use crate::storage::Engine;
 
 /// In memory db storage. Good for testing only
 pub struct InMemoryStorage {
@@ -22,7 +22,7 @@ impl InMemoryStorage {
     }
 }
 
-impl Storage for InMemoryStorage {
+impl Engine for InMemoryStorage {
     fn get(&self, key: &str) -> Option<String> {
         self.storage.get(key).cloned()
     }
