@@ -1,10 +1,9 @@
 const std = @import("std");
-const testing = std.testing;
 
-export fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
+const in_memory_store = @import("in_memory_store.zig");
 
-test "basic add functionality" {
-    try testing.expect(add(3, 7) == 10);
+test {
+    _ = in_memory_store;
+    std.testing.refAllDecls(@This());
+    // or refAllDeclsRecursive
 }
