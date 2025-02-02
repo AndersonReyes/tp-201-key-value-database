@@ -1,7 +1,7 @@
 const std = @import("std");
 
 /// simple in memory key, value store
-const InMemoryStore = struct {
+pub const InMemoryStore = struct {
     storage: std.StringHashMap([]const u8),
 
     const Self = @This();
