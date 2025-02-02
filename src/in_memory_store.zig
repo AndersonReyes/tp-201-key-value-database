@@ -1,18 +1,20 @@
 const std = @import("std");
 
 /// simple in memory key, value store
-const InMemoryStore = struct {
+pub const InMemoryStore = struct {
     storage: std.StringHashMap([]const u8),
 
     const Self = @This();
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const allocator = gpa.allocator();
-
     /// create store in memory. Store is backed by a hashmap with default
     /// generic allocator
-    pub fn init() InMemoryStore {
+    pub fn init(allocator: std.mem.Allocator) InMemoryStore {
         return InMemoryStore{ .storage = std.StringHashMap([]const u8).init(allocator) };
+    }
+
+    /// destroy
+    pub fn deinit(self: *Self) void {
+        self.storage.deinit();
     }
 
     /// remove key from the store. Returns boolean if key exist and it was removed
@@ -29,10 +31,12 @@ const InMemoryStore = struct {
     pub fn get(self: Self, key: []const u8) ?[]const u8 {
         return self.storage.get(key);
     }
+
 };
 
 test "get() should return correct key" {
-    var store = InMemoryStore.init();
+    var store = InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
 
     const expected = "567";
 
@@ -41,12 +45,15 @@ test "get() should return correct key" {
 }
 
 test "get() should return empty if key is missing" {
-    var store = InMemoryStore.init();
+    var store = InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+
     try std.testing.expectEqual(store.get("5"), null);
 }
 
 test "set() should set the key to it's proper value" {
-    var store = InMemoryStore.init();
+    var store = InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
 
     const expected = "value";
 
@@ -58,7 +65,8 @@ test "set() should set the key to it's proper value" {
 }
 
 test "set() should overwrite existing value" {
-    var store = InMemoryStore.init();
+    var store = InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
 
     const expected = "value";
 
@@ -77,7 +85,9 @@ test "set() should overwrite existing value" {
 }
 
 test "remove() should remove existing key" {
-    var store = InMemoryStore.init();
+    var store = InMemoryStore.init(std.testing.allocator);
+    defer store.deinit();
+
     try std.testing.expectEqual(store.storage.count(), 0);
     try store.set("test", "value");
     try std.testing.expectEqual(store.storage.count(), 1);
