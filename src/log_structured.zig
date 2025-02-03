@@ -7,9 +7,9 @@ const LogStructuredStore = struct {
 
 	const Self = @This();
 
-	pub fn init() LogStructuredStore {
+	pub fn init(allocator: std.mem.Allocator) LogStructuredStore {
 		return LogStructuredStore {
-			.inner_store = in_memory_store.InMemoryStore.init(),
+			.inner_store = in_memory_store.InMemoryStore.init(allocator),
 		};
 	}
 
@@ -28,15 +28,21 @@ const LogStructuredStore = struct {
   pub fn get(self: Self, key: []const u8) ?[]const u8 {
 		return self.inner_store.get(key);
 	}
+
+	/// destroy
+  pub fn deinit(self: *Self) void {
+		self.inner_store.deinit();
+	}
 };
 
 test "remove should return false when empty" {
-	var store = LogStructuredStore.init();
+	var store = LogStructuredStore.init(std.testing.allocator);
 	try std.testing.expectEqual(store.remove("invalid"), false);
 }
 
 test "remove should true when removing a real value" {
-	var store = LogStructuredStore.init();
+	var store = LogStructuredStore.init(std.testing.allocator);
+	defer store.deinit();
 
 	try  store.inner_store.set("1", "123456");
 	try std.testing.expectEqual(true, store.remove("1"));
@@ -45,7 +51,8 @@ test "remove should true when removing a real value" {
 }
 
 test "set should store the value" {
-	var store = LogStructuredStore.init();
+	var store = LogStructuredStore.init(std.testing.allocator);
+	defer store.deinit();
 
 	try store.set("1", "123456");
 	try std.testing.expectEqual(1, store.inner_store.storage.count());
@@ -61,13 +68,16 @@ test "set should store the value" {
 }
 
 test "get should retrieve the value at key" {
-	var store = LogStructuredStore.init();
+	var store = LogStructuredStore.init(std.testing.allocator);
+	defer store.deinit();
 
 	try  store.inner_store.set("1", "123456");
 	try std.testing.expectEqual("123456", store.get("1"));
 }
 
 test "get value that does not exist should return null" {
-	var store = LogStructuredStore.init();
+	var store = LogStructuredStore.init(std.testing.allocator);
+	defer store.deinit();
+
 	try std.testing.expectEqual(null, store.get("1"));
 }
