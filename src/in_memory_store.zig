@@ -31,7 +31,6 @@ pub const InMemoryStore = struct {
     pub fn get(self: Self, key: []const u8) ?[]const u8 {
         return self.storage.get(key);
     }
-
 };
 
 test "get() should return correct key" {

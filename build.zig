@@ -15,6 +15,19 @@ pub fn build(b: *std.Build) void {
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
 
+    // Format source code
+    const fmt_step = b.step("fmt", "Run formatting checks");
+    const fmt = b.addFmt(.{
+        .paths = &.{
+            "src",
+            "build.zig",
+        },
+        .check = false,
+    });
+
+    fmt_step.dependOn(&fmt.step);
+    b.getInstallStep().dependOn(&fmt.step);
+
     const lib = b.addStaticLibrary(.{
         .name = "tp-201-key-value-database",
         // In this case the main source file is merely a path, however, in more
@@ -63,6 +76,7 @@ pub fn build(b: *std.Build) void {
     // This will evaluate the `run` step rather than the default, which is "install".
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
+    run_step.dependOn(&fmt.step);
 
     // Creates a step for unit testing. This only builds the test executable
     // but does not run it.
@@ -88,4 +102,5 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run unit tests");
     test_step.dependOn(&run_lib_unit_tests.step);
     test_step.dependOn(&run_exe_unit_tests.step);
+    test_step.dependOn(&fmt.step);
 }
