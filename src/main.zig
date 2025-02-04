@@ -1,23 +1,22 @@
 const std = @import("std");
+const log = @import("log_structured.zig");
 
 pub fn main() !void {
-    var dir = try std.fs.cwd().openDir("test-data", .{});
-    var log = try dir.createFile("log.ndjson", .{ .read = true, .truncate = false, .exclusive = false });
-    defer log.close();
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
 
-    var buf_reader = std.io.bufferedReader(log.reader());
-    const reader = buf_reader.reader();
+    const dir = try std.fs.cwd().openDir("test-log", .{});
+    var store = try log.LogStructuredStore.init(dir, allocator);
+    defer store.deinit();
 
-    var buf: [1024]u8 = undefined;
+    try store.set("1", "one");
+    try store.set("2", "two");
+    try store.set("3", "three");
 
-    while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
-        std.debug.print("line = {s}, \n", .{line});
-    }
+    try std.testing.expectEqualStrings("two", (try store.get("2")).?);
+
+    try store.set("3", "three-again");
+    try store.remove("2");
 }
 
-test "simple test" {
-    var list = std.ArrayList(i32).init(std.testing.allocator);
-    defer list.deinit(); // try commenting this out and see if zig detects the memory leak!
-    try list.append(42);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
-}
+test "simple test" {}
