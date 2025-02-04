@@ -6,59 +6,72 @@ pub const LogStructuredStore = struct {
     index: std.StringHashMap(u64),
     allocator: std.mem.Allocator,
     log_file: []const u8,
+    prev_compaction_size: u64,
 
     const Self = @This();
 
-    // 1MB
-    const log_file_size_limit: u64 = 1000;
+    // TODO: increase later 1MB compaction trigger
+    const log_file_size_limit_bytes: u64 = 100000; // 1Kb
 
     const LogEntry = struct { key: []const u8, value: ?[]const u8 = null, op: []const u8 };
     const max_row_size: usize = 1024; // 1mb row size (key + value)
 
     pub fn init(db_dir: std.fs.Dir, allocator: std.mem.Allocator) !LogStructuredStore {
-        // TODO: hydrate index from log
-
         db_dir.makeDir("logs") catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
         };
         const log_file = "current.ndjson";
         const logs_dir = try db_dir.openDir("logs", .{});
+
         _ = try logs_dir.createFile(log_file, .{ .truncate = false, .exclusive = false });
-        return LogStructuredStore{ .logs_dir = logs_dir, .index = std.StringHashMap(u64).init(allocator), .allocator = allocator, .log_file = log_file };
+        const curr_size = (try (try logs_dir.openFile("current.ndjson", .{})).stat()).size;
+
+        return LogStructuredStore{ .logs_dir = logs_dir, .index = std.StringHashMap(u64).init(allocator), .allocator = allocator, .log_file = log_file, .prev_compaction_size = curr_size };
     }
 
     /// check if the log has passed the max size and rotate if yes
     fn checkAndRotateLog(self: *Self) !void {
-        const log = try self.logs_dir.openFile(self.log_file, .{});
-        const stat = try log.stat();
-        if (stat.size >= log_file_size_limit) {
-            const new_name = try std.fmt.allocPrint(
-                self.allocator,
-                "{d}.ndjson",
-                .{std.time.microTimestamp()},
-            );
-            // defer self.allocator.free(new_name);
+        const new_name_for_old_log = try std.fmt.allocPrint(
+            self.allocator,
+            "{d}.ndjson",
+            .{std.time.microTimestamp()},
+        );
+        defer self.allocator.free(new_name_for_old_log);
 
-            try self.logs_dir.rename(self.log_file, new_name);
-            _ = try self.logs_dir.createFile(self.log_file, .{ .truncate = true, .exclusive = true });
+        const old_log = try self.logs_dir.openFile(self.log_file, .{});
+        const stat = try old_log.stat();
+
+        if (stat.size >= (self.prev_compaction_size + log_file_size_limit_bytes)) {
+            try self.logs_dir.rename(self.log_file, new_name_for_old_log);
+            const new_log = try self.logs_dir.createFile(self.log_file, .{ .truncate = true, .exclusive = true });
+
+            try self.compaction(old_log, new_log);
+
+            new_log.close();
+            old_log.close();
+
+            // delete the old file
+            try self.logs_dir.deleteFile(new_name_for_old_log);
+
+            self.prev_compaction_size = (try (try self.logs_dir.openFile(self.log_file, .{})).stat()).size;
         }
     }
 
-    fn compaction(self: *Self) !void {
-        var log = try self.logs_dir.openFile(self.log_file, .{ .mode = std.fs.File.OpenMode.write_only });
+    /// move the index to the new log
+    fn compaction(self: *Self, old_log: std.fs.File, new_log: std.fs.File) !void {
         var iterator = self.index.iterator();
 
         while (iterator.next()) |entry| {
-            try log.seekTo(entry.value);
+            try old_log.seekTo(entry.value_ptr.*);
 
-            var buf_reader = std.io.bufferedReader(log.reader());
+            var buf_reader = std.io.bufferedReader(old_log.reader());
             const reader = buf_reader.reader();
             var buf: [1024]u8 = undefined;
 
             if (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
-                log.write(line);
-                log.write('\n');
+                _ = try new_log.write(line);
+                _ = try new_log.write("\n");
             }
         }
     }
@@ -125,6 +138,40 @@ pub const LogStructuredStore = struct {
         self.index.deinit();
     }
 };
+
+test "compaction should work by reducing directory size" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    defer store.deinit();
+
+    var prev_size = (try (try tmp.dir.openFile("logs/current.ndjson", .{})).stat()).size;
+
+    var compacted = false;
+
+    for (0..100000) |i| {
+        const k = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{d}",
+            .{i},
+        );
+        defer std.testing.allocator.free(k);
+
+        try store.set("1", k);
+
+        const curr_size = (try (try tmp.dir.openFile("logs/current.ndjson", .{})).stat()).size;
+
+        // if compaction was triggered, the size of the directory should decrease
+        if (curr_size < prev_size) {
+            compacted = true;
+            break;
+        } else {
+            prev_size = curr_size;
+        }
+    }
+
+    try std.testing.expect(compacted);
+}
 
 test "remove should true when removing a real value" {
     var tmp = std.testing.tmpDir(.{});

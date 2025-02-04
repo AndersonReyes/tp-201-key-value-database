@@ -9,14 +9,30 @@ pub fn main() !void {
     var store = try log.LogStructuredStore.init(dir, allocator);
     defer store.deinit();
 
-    try store.set("1", "one");
-    try store.set("2", "two");
-    try store.set("3", "three");
+    var prev_size = (try (try dir.openFile("logs/current.ndjson", .{})).stat()).size;
 
-    try std.testing.expectEqualStrings("two", (try store.get("2")).?);
+    var compacted = false;
 
-    try store.set("3", "three-again");
-    try store.remove("2");
+    for (0..1000) |i| {
+        const k = try std.fmt.allocPrint(
+            allocator,
+            "{d}",
+            .{i},
+        );
+        defer allocator.free(k);
+
+        try store.set("1", k);
+
+        const current_size = (try (try dir.openFile("logs/current.ndjson", .{})).stat()).size;
+
+        // if compaction was triggered, the size of the directory should decrease
+        if (current_size < prev_size) {
+            compacted = true;
+            break;
+        } else {
+            prev_size = current_size;
+        }
+    }
 }
 
 test "simple test" {}
