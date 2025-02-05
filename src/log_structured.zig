@@ -1,15 +1,18 @@
 const std = @import("std");
-const in_memory_store = @import("in_memory_store.zig");
 
 pub const LogStructuredStore = struct {
     logs_dir: std.fs.Dir,
     index: std.StringHashMap(u64),
     allocator: std.mem.Allocator,
-    log_file: []const u8,
+    /// use this value to keep track of the file sizes as we rotate them. We need to ensure the file
+    /// size limit is based on the starting size of the file after compaction.
+    /// Otherwise we will always compact the file once it reaches the max size with all
+    /// unique entries.
     prev_compaction_size: u64,
 
     const Self = @This();
 
+    const log_file = "current.ndjson";
     // TODO: increase later 1MB compaction trigger
     const log_file_size_limit_bytes: u64 = 100000; // 1Kb
 
@@ -21,13 +24,12 @@ pub const LogStructuredStore = struct {
             error.PathAlreadyExists => {},
             else => return err,
         };
-        const log_file = "current.ndjson";
         const logs_dir = try db_dir.openDir("logs", .{});
 
         _ = try logs_dir.createFile(log_file, .{ .truncate = false, .exclusive = false });
         const curr_size = (try (try logs_dir.openFile("current.ndjson", .{})).stat()).size;
 
-        return LogStructuredStore{ .logs_dir = logs_dir, .index = std.StringHashMap(u64).init(allocator), .allocator = allocator, .log_file = log_file, .prev_compaction_size = curr_size };
+        return LogStructuredStore{ .logs_dir = logs_dir, .index = std.StringHashMap(u64).init(allocator), .allocator = allocator, .prev_compaction_size = curr_size };
     }
 
     /// check if the log has passed the max size and rotate if yes
@@ -39,12 +41,12 @@ pub const LogStructuredStore = struct {
         );
         defer self.allocator.free(new_name_for_old_log);
 
-        const old_log = try self.logs_dir.openFile(self.log_file, .{});
+        const old_log = try self.logs_dir.openFile(log_file, .{});
         const stat = try old_log.stat();
 
         if (stat.size >= (self.prev_compaction_size + log_file_size_limit_bytes)) {
-            try self.logs_dir.rename(self.log_file, new_name_for_old_log);
-            const new_log = try self.logs_dir.createFile(self.log_file, .{ .truncate = true, .exclusive = true });
+            try self.logs_dir.rename(log_file, new_name_for_old_log);
+            const new_log = try self.logs_dir.createFile(log_file, .{ .truncate = true, .exclusive = true });
 
             try self.compaction(old_log, new_log);
 
@@ -54,7 +56,7 @@ pub const LogStructuredStore = struct {
             // delete the old file
             try self.logs_dir.deleteFile(new_name_for_old_log);
 
-            self.prev_compaction_size = (try (try self.logs_dir.openFile(self.log_file, .{})).stat()).size;
+            self.prev_compaction_size = (try (try self.logs_dir.openFile(log_file, .{})).stat()).size;
         }
     }
 
@@ -78,7 +80,7 @@ pub const LogStructuredStore = struct {
 
     /// remove key from the store. Returns boolean if key exist and it was removed
     pub fn remove(self: *Self, key: []const u8) !void {
-        var log = try self.logs_dir.openFile(self.log_file, .{ .mode = std.fs.File.OpenMode.write_only });
+        var log = try self.logs_dir.openFile(log_file, .{ .mode = std.fs.File.OpenMode.write_only });
         defer log.close();
         try log.seekFromEnd(0);
 
@@ -92,8 +94,8 @@ pub const LogStructuredStore = struct {
 
     /// put a key in the store
     pub fn set(self: *Self, key: []const u8, value: []const u8) !void {
-        // var log = try self.logs_dir.createFile(self.log_file, .{ .truncate = false, .exclusive = false });
-        var log = try self.logs_dir.openFile(self.log_file, .{ .mode = std.fs.File.OpenMode.write_only });
+        // var log = try self.logs_dir.createFile(log_file, .{ .truncate = false, .exclusive = false });
+        var log = try self.logs_dir.openFile(log_file, .{ .mode = std.fs.File.OpenMode.write_only });
         defer log.close();
         try log.seekFromEnd(0);
 
@@ -106,7 +108,7 @@ pub const LogStructuredStore = struct {
     /// retrieve a key from the store
     pub fn get(self: Self, key: []const u8) !?[]const u8 {
         if (self.index.get(key)) |offset| {
-            var log = try self.logs_dir.openFile(self.log_file, .{});
+            var log = try self.logs_dir.openFile(log_file, .{});
             defer log.close();
 
             try log.seekTo(offset);
