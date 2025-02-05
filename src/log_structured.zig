@@ -32,49 +32,47 @@ pub const LogStructuredStore = struct {
         return LogStructuredStore{ .logs_dir = logs_dir, .index = std.StringHashMap(u64).init(allocator), .allocator = allocator, .prev_compaction_size = curr_size };
     }
 
-    /// check if the log has passed the max size and rotate if yes
-    fn checkAndRotateLog(self: *Self) !void {
-        const new_name_for_old_log = try std.fmt.allocPrint(
-            self.allocator,
-            "{d}.ndjson",
-            .{std.time.microTimestamp()},
-        );
-        defer self.allocator.free(new_name_for_old_log);
-
+    /// move the index (latest update only) to the new log
+    fn compaction(self: *Self) !void {
         const old_log = try self.logs_dir.openFile(log_file, .{});
+        defer old_log.close();
+
         const stat = try old_log.stat();
 
+        // only compact if we reached the file size limit
         if (stat.size >= (self.prev_compaction_size + log_file_size_limit_bytes)) {
+            const new_name_for_old_log = try std.fmt.allocPrint(
+                self.allocator,
+                "{d}.ndjson",
+                .{std.time.microTimestamp()},
+            );
+            defer self.allocator.free(new_name_for_old_log);
+
             try self.logs_dir.rename(log_file, new_name_for_old_log);
+
             const new_log = try self.logs_dir.createFile(log_file, .{ .truncate = true, .exclusive = true });
+            defer new_log.close();
 
-            try self.compaction(old_log, new_log);
+            self.prev_compaction_size = (try (try self.logs_dir.openFile(log_file, .{})).stat()).size;
 
-            new_log.close();
-            old_log.close();
+            // move the index to the new file
+            var iterator = self.index.iterator();
+
+            while (iterator.next()) |entry| {
+                try old_log.seekTo(entry.value_ptr.*);
+
+                var buf_reader = std.io.bufferedReader(old_log.reader());
+                const reader = buf_reader.reader();
+                var buf: [1024]u8 = undefined;
+
+                if (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
+                    _ = try new_log.write(line);
+                    _ = try new_log.write("\n");
+                }
+            }
 
             // delete the old file
             try self.logs_dir.deleteFile(new_name_for_old_log);
-
-            self.prev_compaction_size = (try (try self.logs_dir.openFile(log_file, .{})).stat()).size;
-        }
-    }
-
-    /// move the index to the new log
-    fn compaction(self: *Self, old_log: std.fs.File, new_log: std.fs.File) !void {
-        var iterator = self.index.iterator();
-
-        while (iterator.next()) |entry| {
-            try old_log.seekTo(entry.value_ptr.*);
-
-            var buf_reader = std.io.bufferedReader(old_log.reader());
-            const reader = buf_reader.reader();
-            var buf: [1024]u8 = undefined;
-
-            if (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
-                _ = try new_log.write(line);
-                _ = try new_log.write("\n");
-            }
         }
     }
 
@@ -89,7 +87,7 @@ pub const LogStructuredStore = struct {
             _ = try log.write("\n");
         }
         _ = self.index.remove(key);
-        try self.checkAndRotateLog();
+        try self.compaction();
     }
 
     /// put a key in the store
@@ -102,11 +100,12 @@ pub const LogStructuredStore = struct {
         try self.index.put(key, try log.getPos());
         try std.json.stringify(.{ .key = key, .value = value, .op = "set" }, .{}, log.writer());
         _ = try log.write("\n");
-        try self.checkAndRotateLog();
+        try self.compaction();
     }
 
     /// retrieve a key from the store
     pub fn get(self: Self, key: []const u8) !?[]const u8 {
+        // TODO: if the key is not in the index, we need to find it from the log
         if (self.index.get(key)) |offset| {
             var log = try self.logs_dir.openFile(log_file, .{});
             defer log.close();
@@ -141,9 +140,64 @@ pub const LogStructuredStore = struct {
     }
 };
 
+test "db should lookup from disk / hydrate when the value is not in the index" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var max_key: usize = undefined;
+
+    {
+        var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+        defer store.deinit();
+
+        var prev_size = (try (try tmp.dir.openFile("logs/current.ndjson", .{})).stat()).size;
+
+        var compacted = false;
+
+        for (0..100000) |i| {
+            const k = try std.fmt.allocPrint(
+                std.testing.allocator,
+                "{d}",
+                .{i},
+            );
+            defer std.testing.allocator.free(k);
+
+            try store.set("1", k);
+            try store.set("2", k);
+
+            const curr_size = (try (try tmp.dir.openFile("logs/current.ndjson", .{})).stat()).size;
+
+            // if compaction was triggered, the size of the directory should decrease
+            if (curr_size < prev_size) {
+                compacted = true;
+                max_key = i;
+                break;
+            } else {
+                prev_size = curr_size;
+            }
+        }
+
+        try std.testing.expect(compacted);
+    }
+
+    var new_store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    defer new_store.deinit();
+
+    const w = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "{d}",
+        .{max_key},
+    );
+    defer std.testing.allocator.free(w);
+
+    try std.testing.expectEqualStrings(w, (try new_store.get("1")).?);
+    try std.testing.expectEqualStrings(w, (try new_store.get("2")).?);
+}
+
 test "compaction should work by reducing directory size" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
+
     var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
     defer store.deinit();
 
