@@ -151,24 +151,26 @@ pub const LogStructuredStore = struct {
     /// retrieve a key from the store. caller owns the memory of
     /// the returned value.
     pub fn get(self: *Self, key: []const u8) !?[]const u8 {
-        const offset = self.index.get(key).?;
+        const offset = self.index.get(key);
 
-        var log = try self.logs_dir.openFile(log_file, .{});
-        defer log.close();
+        if (offset != null) {
+            var log = try self.logs_dir.openFile(log_file, .{});
+            defer log.close();
 
-        try log.seekTo(offset);
+            try log.seekTo(offset.?);
 
-        const reader = log.reader();
+            const reader = log.reader();
 
-        var buf: [1024]u8 = undefined;
+            var buf: [1024]u8 = undefined;
 
-        if (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
-            const parsed = try std.json.parseFromSlice(LogEntry, self.allocator, line, .{});
-            defer parsed.deinit();
+            if (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
+                const parsed = try std.json.parseFromSlice(LogEntry, self.allocator, line, .{});
+                defer parsed.deinit();
 
-            if (std.mem.eql(u8, parsed.value.key, key)) {
-                const value = try self.allocator.dupe(u8, parsed.value.value.?);
-                return value;
+                if (std.mem.eql(u8, parsed.value.key, key)) {
+                    const value = try self.allocator.dupe(u8, parsed.value.value.?);
+                    return value;
+                }
             }
         }
 
@@ -230,130 +232,117 @@ test "db should lookup from disk / hydrate when the value is not in the index" {
         try std.testing.expectEqualStrings("11", actual2);
     }
 }
-//
-// test "compaction should work by reducing directory size" {
-//     var tmp = std.testing.tmpDir(.{});
-//     defer tmp.cleanup();
-//
-//     var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
-//     defer store.deinit();
-//
-//     var prev_size = (try (try tmp.dir.openFile("logs/current.ndjson", .{})).stat()).size;
-//
-//     var compacted = false;
-//
-//     for (0..100000) |i| {
-//         const k = try std.fmt.allocPrint(
-//             std.testing.allocator,
-//             "{d}",
-//             .{i},
-//         );
-//         defer std.testing.allocator.free(k);
-//
-//         try store.set("1", k);
-//
-//         const curr_size = (try (try tmp.dir.openFile("logs/current.ndjson", .{})).stat()).size;
-//
-//         // if compaction was triggered, the size of the directory should decrease
-//         if (curr_size < prev_size) {
-//             compacted = true;
-//             break;
-//         } else {
-//             prev_size = curr_size;
-//         }
-//     }
-//
-//     try std.testing.expect(compacted);
-// }
-//
-// test "remove should true when removing a real value" {
-//     var tmp = std.testing.tmpDir(.{});
-//     defer tmp.cleanup();
-//     var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
-//     defer store.deinit();
-//
-//     var log = try tmp.dir.createFile("logs/current.ndjson", .{ .truncate = false, .read = true, .exclusive = false });
-//     defer log.close();
-//
-//     try log.seekTo(0);
-//     try store.remove("2");
-//
-//     try log.seekTo(0);
-//     var buf_reader = std.io.bufferedReader(log.reader());
-//     const reader = buf_reader.reader();
-//     var buf: [1024]u8 = undefined;
-//     while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
-//         try std.testing.expectEqualStrings("{\"key\":\"2\",\"op\":\"remove\"}", line);
-//     }
-//     // else try std.testing.expect(false);
-// }
-//
-// test "set should store the value" {
-//     var tmp = std.testing.tmpDir(.{});
-//     defer tmp.cleanup();
-//     var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
-//     defer store.deinit();
-//
-//     var log = try tmp.dir.createFile("logs/current.ndjson", .{ .truncate = false, .exclusive = false });
-//     defer log.close();
-//
-//     try log.seekFromEnd(0);
-//
-//     const writer = log.writer();
-//
-//     const pos1 = try log.getPos();
-//     try store.index.put("2", pos1);
-//     try std.json.stringify(.{ .key = "2", .value = "123456", .op = "set" }, .{}, writer);
-//     _ = try log.write("\n");
-//
-//     const actual1 = (try store.get("2")).?;
-//     try std.testing.expectEqualStrings("123456", actual1);
-//
-//     const pos2 = try log.getPos();
-//     try store.index.put("1", pos2);
-//     try std.json.stringify(.{ .key = "1", .value = "one", .op = "set" }, .{}, writer);
-//     _ = try log.write("\n");
-//
-//     const actual2 = (try store.get("1")).?;
-//     try std.testing.expectEqualStrings("one", actual2);
-//     try std.testing.expectEqual(pos2, store.index.get("1"));
-// }
-//
-// test "get should retrieve the value at key" {
-//     var tmp = std.testing.tmpDir(.{});
-//     defer tmp.cleanup();
-//     var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
-//     defer store.deinit();
-//
-//     var log = try tmp.dir.createFile("logs/current.ndjson", .{ .truncate = true, .exclusive = false });
-//     defer log.close();
-//
-//     try log.seekFromEnd(0);
-//
-//     try store.index.put("2", try log.getPos());
-//
-//     try std.json.stringify(.{ .key = "2", .value = "1234", .op = "set" }, .{}, log.writer());
-//     _ = try log.write("\n");
-//
-//     const actual = (try store.get("2")).?;
-//     try std.testing.expectEqualStrings("1234", actual);
-// }
-//
-// test "get value that does not exist should return null" {
-//     var tmp = std.testing.tmpDir(.{});
-//     defer tmp.cleanup();
-//     var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
-//     defer store.deinit();
-//
-//     var log = try tmp.dir.createFile("logs/current.ndjson", .{ .truncate = true, .exclusive = false });
-//     defer log.close();
-//
-//     try log.seekFromEnd(0);
-//
-//     try store.index.put("2", try log.getPos());
-//     try std.json.stringify(.{ .key = "2", .value = "1234", .op = "set" }, .{}, log.writer());
-//     _ = try log.write("\n");
-//
-//     try std.testing.expectEqual(null, store.get("1"));
-//     try std.testing.expectEqual(null, store.get("12"));
-// }
+
+test "compaction should work by reducing directory size" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    defer store.deinit();
+
+    var prev_size = (try (try tmp.dir.openFile("logs/current.ndjson", .{})).stat()).size;
+
+    var compacted = false;
+
+    for (0..100000) |i| {
+        const k = try std.fmt.allocPrint(
+            std.testing.allocator,
+            "{d}",
+            .{i},
+        );
+        defer std.testing.allocator.free(k);
+
+        try store.set("1", k);
+
+        const curr_size = (try (try tmp.dir.openFile("logs/current.ndjson", .{})).stat()).size;
+
+        // if compaction was triggered, the size of the directory should decrease
+        if (curr_size < prev_size) {
+            compacted = true;
+            break;
+        } else {
+            prev_size = curr_size;
+        }
+    }
+
+    try std.testing.expect(compacted);
+}
+
+test "remove should true when removing a real value" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    defer store.deinit();
+
+    var log = try tmp.dir.createFile("logs/current.ndjson", .{ .truncate = false, .read = true, .exclusive = false });
+    defer log.close();
+
+    try log.seekTo(0);
+    try store.remove("2");
+
+    try log.seekTo(0);
+    var buf_reader = std.io.bufferedReader(log.reader());
+    const reader = buf_reader.reader();
+    var buf: [1024]u8 = undefined;
+    while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
+        try std.testing.expectEqualStrings("{\"key\":\"2\",\"op\":\"remove\"}", line);
+    }
+    // else try std.testing.expect(false);
+}
+
+test "set should store the value" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    defer store.deinit();
+
+    try store.set("2", "123456");
+    try store.set("1", "11");
+
+    var log = try tmp.dir.createFile("logs/current.ndjson", .{ .read = true, .truncate = false, .exclusive = false });
+    defer log.close();
+
+    try log.seekTo(0);
+
+    var buf: [1024]u8 = undefined;
+    const reader = log.reader();
+
+    const line1 = (try reader.readUntilDelimiterOrEof(&buf, '\n')).?;
+
+    try std.testing.expect(line1.len > 0);
+    try std.testing.expectEqualStrings("{\"key\":\"2\",\"value\":\"123456\",\"op\":\"set\"}", line1);
+    try std.testing.expectEqual(0, store.index.get("2"));
+
+    const line2 = (try reader.readUntilDelimiterOrEof(&buf, '\n')).?;
+
+    try std.testing.expect(line2.len > 0);
+    try std.testing.expectEqualStrings("{\"key\":\"1\",\"value\":\"11\",\"op\":\"set\"}", line2);
+    try std.testing.expectEqual(line1.len + 1, store.index.get("1"));
+}
+
+test "get should retrieve the value at key" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    defer store.deinit();
+
+    try store.set("2", "22");
+    try store.set("1", "11");
+
+    const actual = (try store.get("1")).?;
+    defer std.testing.allocator.free(actual);
+    try std.testing.expectEqualStrings("11", actual);
+
+    const actual2 = (try store.get("2")).?;
+    defer std.testing.allocator.free(actual2);
+    try std.testing.expectEqualStrings("22", actual2);
+}
+
+test "get value that does not exist should return null" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    defer store.deinit();
+
+    try std.testing.expectEqual(null, store.get("doesnotexist"));
+}
