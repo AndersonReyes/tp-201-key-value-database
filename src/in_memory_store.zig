@@ -18,8 +18,8 @@ pub const InMemoryStore = struct {
     }
 
     /// remove key from the store. Returns boolean if key exist and it was removed
-    pub fn remove(self: *Self, key: []const u8) bool {
-        return self.storage.remove(key);
+    pub fn remove(self: *Self, key: []const u8) !void {
+        _ = self.storage.remove(key);
     }
 
     /// put a key in the store
@@ -28,7 +28,7 @@ pub const InMemoryStore = struct {
     }
 
     /// retrieve a key from the store
-    pub fn get(self: Self, key: []const u8) ?[]const u8 {
+    pub fn get(self: *Self, key: []const u8) !?[]const u8 {
         return self.storage.get(key);
     }
 };
@@ -40,7 +40,7 @@ test "get() should return correct key" {
     const expected = "567";
 
     try store.storage.put("5", expected);
-    try std.testing.expectEqual(store.get("5").?, expected);
+    try std.testing.expectEqual((try store.get("5")).?, expected);
 }
 
 test "get() should return empty if key is missing" {

@@ -1,6 +1,7 @@
 const std = @import("std");
+const store_interface = @import("store.zig");
 
-pub const LogStructuredStore = struct {
+pub const LogStructured = struct {
     logs_dir: std.fs.Dir,
     index: std.StringHashMap(u64),
     allocator: std.mem.Allocator,
@@ -19,7 +20,7 @@ pub const LogStructuredStore = struct {
     const LogEntry = struct { key: []const u8, value: ?[]const u8 = null, op: []const u8 };
     const max_row_size: usize = 1024; // 1mb row size (key + value)
 
-    pub fn init(db_dir: std.fs.Dir, allocator: std.mem.Allocator) !LogStructuredStore {
+    pub fn init(db_dir: std.fs.Dir, allocator: std.mem.Allocator) !LogStructured {
         db_dir.makeDir("logs") catch |err| switch (err) {
             error.PathAlreadyExists => {},
             else => return err,
@@ -29,7 +30,7 @@ pub const LogStructuredStore = struct {
         _ = try logs_dir.createFile(log_file, .{ .truncate = false, .exclusive = false });
         const curr_size = (try (try logs_dir.openFile("current.ndjson", .{})).stat()).size;
 
-        var db = LogStructuredStore{
+        var db = LogStructured{
             .logs_dir = logs_dir,
             .index = std.StringHashMap(u64).init(allocator),
             .allocator = allocator,
@@ -90,12 +91,12 @@ pub const LogStructuredStore = struct {
         defer log.close();
         try log.seekFromEnd(0);
 
-        if (self.index.contains(key)) {
+        if (self.index.fetchRemove(key)) |entry| {
             try std.json.stringify(.{ .key = key, .op = "remove" }, .{}, log.writer());
             _ = try log.write("\n");
+            self.allocator.free(entry.key);
+            try self.compaction();
         }
-        _ = self.index.remove(key);
-        try self.compaction();
     }
 
     /// put a key in the store
@@ -150,7 +151,7 @@ pub const LogStructuredStore = struct {
 
     /// retrieve a key from the store. caller owns the memory of
     /// the returned value.
-    pub fn get(self: *Self, key: []const u8) !?[]const u8 {
+    pub fn get(self: Self, key: []const u8) !?[]const u8 {
         const offset = self.index.get(key);
 
         if (offset != null) {
@@ -193,7 +194,7 @@ test "db should lookup from disk / hydrate when the value is not in the index" {
     defer tmp.cleanup();
 
     {
-        var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+        var store = try LogStructured.init(tmp.dir, std.testing.allocator);
         defer store.deinit();
 
         try store.set("1", "11");
@@ -208,7 +209,7 @@ test "db should lookup from disk / hydrate when the value is not in the index" {
         try std.testing.expectEqualStrings("11", actual2);
     }
 
-    var new_store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    var new_store = try LogStructured.init(tmp.dir, std.testing.allocator);
     defer new_store.deinit();
 
     {
@@ -237,7 +238,7 @@ test "compaction should work by reducing directory size" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    var store = try LogStructured.init(tmp.dir, std.testing.allocator);
     defer store.deinit();
 
     var prev_size = (try (try tmp.dir.openFile("logs/current.ndjson", .{})).stat()).size;
@@ -271,7 +272,7 @@ test "compaction should work by reducing directory size" {
 test "remove should true when removing a real value" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    var store = try LogStructured.init(tmp.dir, std.testing.allocator);
     defer store.deinit();
 
     var log = try tmp.dir.createFile("logs/current.ndjson", .{ .truncate = false, .read = true, .exclusive = false });
@@ -293,7 +294,7 @@ test "remove should true when removing a real value" {
 test "set should store the value" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    var store = try LogStructured.init(tmp.dir, std.testing.allocator);
     defer store.deinit();
 
     try store.set("2", "123456");
@@ -323,7 +324,7 @@ test "set should store the value" {
 test "get should retrieve the value at key" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    var store = try LogStructured.init(tmp.dir, std.testing.allocator);
     defer store.deinit();
 
     try store.set("2", "22");
@@ -341,7 +342,7 @@ test "get should retrieve the value at key" {
 test "get value that does not exist should return null" {
     var tmp = std.testing.tmpDir(.{});
     defer tmp.cleanup();
-    var store = try LogStructuredStore.init(tmp.dir, std.testing.allocator);
+    var store = try LogStructured.init(tmp.dir, std.testing.allocator);
     defer store.deinit();
 
     try std.testing.expectEqual(null, store.get("doesnotexist"));

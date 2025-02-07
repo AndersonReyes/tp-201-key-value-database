@@ -6,7 +6,7 @@ pub fn main() !void {
     const allocator = gpa.allocator();
 
     const dir = try std.fs.cwd().openDir("test-log", .{});
-    var store = try log.LogStructuredStore.init(dir, allocator);
+    var store = try log.LogStructured.init(dir, allocator);
     defer store.deinit();
 
     var prev_size = (try (try dir.openFile("logs/current.ndjson", .{})).stat()).size;
