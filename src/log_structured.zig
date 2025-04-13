@@ -1,5 +1,4 @@
 const std = @import("std");
-const store_interface = @import("store.zig");
 
 pub const LogStructured = struct {
     logs_dir: std.fs.Dir,
@@ -347,3 +346,37 @@ test "get value that does not exist should return null" {
 
     try std.testing.expectEqual(null, store.get("doesnotexist"));
 }
+
+// test "run command: get" {
+//     const localhost = try std.net.Address.parseIp("127.0.0.1", 54321);
+//     var server = try localhost.listen(.{ .reuse_address = true });
+//     defer server.deinit();
+//
+//     const S = struct {
+//         fn clientFn(server_address: std.net.Address) !void {
+//             const socket = try std.net.tcpConnectToAddress(server_address);
+//             defer socket.close();
+//
+//             var tmp = std.testing.tmpDir(.{});
+//             defer tmp.cleanup();
+//             var store = try LogStructured.init(tmp.dir, std.testing.allocator);
+//             defer store.deinit();
+//
+//             try store.set("hello", "world");
+//
+//             const cmd = [_][]const u8{ "get", "hello" };
+//             try store.run_command(&cmd, socket);
+//         }
+//     };
+//
+//     const t = try std.Thread.spawn(.{}, S.clientFn, .{server.listen_address});
+//     defer t.join();
+//
+//     var client = try server.accept();
+//     defer client.stream.close();
+//
+//     var buf: [5]u8 = undefined;
+//     _ = try client.stream.reader().read(&buf);
+//
+//     try std.testing.expectEqualSlices(u8, "world", buf[0..]);
+// }
