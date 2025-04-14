@@ -1,5 +1,4 @@
 const std = @import("std");
-const store_interface = @import("store.zig");
 
 pub const LogStructured = struct {
     logs_dir: std.fs.Dir,
@@ -10,6 +9,7 @@ pub const LogStructured = struct {
     /// Otherwise we will always compact the file once it reaches the max size with all
     /// unique entries.
     prev_compaction_size: u64,
+    count: usize,
 
     const Self = @This();
 
@@ -35,6 +35,7 @@ pub const LogStructured = struct {
             .index = std.StringHashMap(u64).init(allocator),
             .allocator = allocator,
             .prev_compaction_size = curr_size,
+            .count = 0
         };
         try db.hydrate_db();
 
@@ -95,6 +96,7 @@ pub const LogStructured = struct {
             try std.json.stringify(.{ .key = key, .op = "remove" }, .{}, log.writer());
             _ = try log.write("\n");
             self.allocator.free(entry.key);
+            self.count -= 1;
             try self.compaction();
         }
     }
@@ -111,6 +113,7 @@ pub const LogStructured = struct {
             entry.key_ptr.* = try self.allocator.dupe(u8, key);
         }
         entry.value_ptr.* = try log.getPos();
+        self.count += 1;
 
         try std.json.stringify(.{ .key = key, .value = value, .op = "set" }, .{}, log.writer());
         _ = try log.write("\n");
@@ -118,6 +121,7 @@ pub const LogStructured = struct {
     }
 
     fn hydrate_db(self: *Self) !void {
+        self.count = 0;
         var log = try self.logs_dir.openFile(log_file, .{});
         defer log.close();
 
@@ -144,6 +148,7 @@ pub const LogStructured = struct {
                 entry.key_ptr.* = try self.allocator.dupe(u8, parsed.value.key);
             }
             entry.value_ptr.* = current_line_start;
+            self.count += 1;
 
             current_line_start += line.len + 1;
         }
@@ -186,6 +191,12 @@ pub const LogStructured = struct {
         }
 
         self.index.deinit();
+        self.count = 0;
+    }
+
+    /// number items in the db
+    pub fn size(self: Self) usize {
+        return self.count;
     }
 };
 
