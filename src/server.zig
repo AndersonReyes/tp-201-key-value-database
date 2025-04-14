@@ -1,15 +1,16 @@
 const std = @import("std");
 const log = @import("log_structured.zig");
+const utils = @import("utils.zig");
 
 /// Write msg to socket with tries
 pub const DbServer = struct {
-    db: log.LogStructured,
+    db: *log.LogStructured,
     server: std.net.Server,
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
-    pub fn init(db: log.LogStructured, host: std.net.Address, allocator: std.mem.Allocator) !DbServer {
+    pub fn init(db: *log.LogStructured, host: std.net.Address, allocator: std.mem.Allocator) !DbServer {
         const server = try host.listen(.{ .reuse_address = true });
 
         const store_server = DbServer{ .db = db, .server = server, .allocator = allocator };
@@ -18,28 +19,25 @@ pub const DbServer = struct {
     }
 
     pub fn run_command(self: *Self, values: []const []const u8, socket: std.net.Stream) !void {
-        var i: usize = 0;
+        const cmd = values[0];
 
-        while (i < values.len) {
-            const cmd = values[i];
-
-            if (std.mem.eql(u8, cmd, "get")) {
-                if (i + 1 > values.len) {
-                   try socket.writeAll("missing key to get");
-                }
-
-                if (try self.db.get(values[i + 1])) |v| {
-                    defer self.allocator.free(v);
-                    try socket.writeAll(v);
-                    i += 1;
-                } else {
-                    const err = try std.fmt.allocPrint(self.allocator, "key not found!: {s}", .{values[i + 1]});
-                    defer self.allocator.free(err);
-                    try socket.writeAll(err);
-                }
+        if (std.mem.eql(u8, cmd, "get")) {
+            if (try self.db.get(values[1])) |v| {
+                defer self.allocator.free(v);
+                try utils.write(v, socket, self.allocator);
+            } else {
+                const err = try std.fmt.allocPrint(self.allocator, "key not found!: {s}", .{values[1]});
+                defer self.allocator.free(err);
+                try utils.write(err, socket, self.allocator);
             }
-
-            i += 1;
+        } else if (std.mem.eql(u8, cmd, "set")) {
+            try self.db.set(values[1], values[2]);
+            try utils.write("key set!", socket, self.allocator);
+        } else if (std.mem.eql(u8, cmd, "remove")) {
+            try self.db.remove(values[1]);
+            try utils.write("key removed!", socket, self.allocator);
+        } else {
+            try utils.write("invalid command! Try again.", socket, self.allocator);
         }
     }
 
@@ -51,27 +49,29 @@ pub const DbServer = struct {
         var client = try self.server.accept();
         defer client.stream.close();
 
-        var buf: [1024]u8 = undefined;
-        _ = try client.stream.reader().read(&buf);
+        const line_opt = try utils.read(client.stream, self.allocator);
+        defer utils.free_optional(self.allocator, line_opt);
 
-        var commands = std.ArrayList([]const u8).init(self.allocator);
-        defer {
-            for (commands.items) |str| {
-                std.testing.allocator.free(str);
+        if (line_opt) |line| {
+            var commands = std.ArrayList([]const u8).init(self.allocator);
+            defer {
+                for (commands.items) |v| {
+                    self.allocator.free(v);
+                }
+                commands.deinit();
             }
-            commands.deinit();
+
+            var values = std.mem.splitScalar(u8, line, ' ');
+
+            while (values.next()) |v| {
+                try commands.append(v);
+            }
+
+            const slice = try commands.toOwnedSlice();
+            defer self.allocator.free(slice);
+
+            try self.run_command(slice, client.stream);
         }
-
-        var values = std.mem.splitScalar(u8, buf[0..], ' ');
-
-        while (values.next()) |v| {
-            try commands.append(v);
-        }
-
-        const slice = try commands.toOwnedSlice();
-        defer self.allocator.free(slice);
-
-        try self.run_command(slice, client.stream);
     }
 };
 
@@ -86,7 +86,7 @@ test "server can receive requests" {
 
     try inner.set("hello", "world");
 
-    var server = try DbServer.init(inner, localhost, std.testing.allocator);
+    var server = try DbServer.init(&inner, localhost, std.testing.allocator);
     defer server.deinit();
 
     const command = "can you be reached?";
@@ -96,7 +96,7 @@ test "server can receive requests" {
             const socket = try std.net.tcpConnectToAddress(server_address);
             defer socket.close();
 
-            _ = try socket.writer().write(command);
+            try utils.write(command, socket, std.testing.allocator);
         }
     };
 
@@ -106,10 +106,10 @@ test "server can receive requests" {
     var client = try server.server.accept();
     defer client.stream.close();
 
-    var buf: [command.len]u8 = undefined;
-    _ = try client.stream.reader().read(&buf);
+    const actual = try utils.read(client.stream, std.testing.allocator);
+    defer utils.free_optional(std.testing.allocator, actual);
 
-    try std.testing.expectEqualSlices(u8, command, buf[0..]);
+    try std.testing.expectEqualStrings(command, actual.?);
 }
 
 test "run command: get" {
@@ -123,7 +123,7 @@ test "run command: get" {
 
     try inner.set("hello", "world");
 
-    var server = try DbServer.init(inner, localhost, std.testing.allocator);
+    var server = try DbServer.init(&inner, localhost, std.testing.allocator);
     defer server.deinit();
 
     const S = struct {
@@ -131,15 +131,14 @@ test "run command: get" {
             const socket = try std.net.tcpConnectToAddress(server_address);
             defer socket.close();
 
-            _ = try socket.writer().write("get hello");
+            try utils.write("get hello", socket, std.testing.allocator);
 
-            var buf: [40]u8 = undefined;
-            _ = try socket.reader().readAll(&buf);
-            std.debug.print("slice allocated: {s}", .{buf});
+            const actual = try utils.read(socket, std.testing.allocator);
+            defer utils.free_optional(std.testing.allocator, actual);
 
             const expected = "world";
 
-            try std.testing.expectEqualStrings(expected, buf[0..]);
+            try std.testing.expectEqualStrings(expected, actual.?);
         }
     };
 
@@ -147,4 +146,76 @@ test "run command: get" {
     defer t.join();
 
     _ = try server.accept();
+}
+
+test "run command: set" {
+    const localhost = try std.net.Address.parseIp("127.0.0.1", 54321);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var inner = try log.LogStructured.init(tmp.dir, std.testing.allocator);
+    defer inner.deinit();
+
+    try std.testing.expectEqual(0, inner.size());
+
+    var server = try DbServer.init(&inner, localhost, std.testing.allocator);
+    defer server.deinit();
+
+    const S = struct {
+        fn clientFn(server_address: std.net.Address) !void {
+            const socket = try std.net.tcpConnectToAddress(server_address);
+            defer socket.close();
+
+            const reply1 = try utils.send_and_receive("set hello thisismyworld", socket, std.testing.allocator);
+            defer utils.free_optional(std.testing.allocator, reply1);
+            try std.testing.expectEqualStrings("key set!", reply1.?);
+        }
+    };
+
+    // scoped thread run so we can continue asserting after the accept.
+    {
+        const t = try std.Thread.spawn(.{}, S.clientFn, .{server.server.listen_address});
+        defer t.join();
+        try server.accept();
+    }
+
+    try std.testing.expectEqual(1, inner.size());
+    const actual = try inner.get("hello");
+    defer utils.free_optional(std.testing.allocator, actual);
+    try std.testing.expectEqualStrings("thisismyworld", actual.?);
+}
+
+test "run command: remove" {
+    const localhost = try std.net.Address.parseIp("127.0.0.1", 54321);
+
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var inner = try log.LogStructured.init(tmp.dir, std.testing.allocator);
+    defer inner.deinit();
+    try inner.set("hello", "this is a new value");
+
+    var server = try DbServer.init(&inner, localhost, std.testing.allocator);
+    defer server.deinit();
+
+    const S = struct {
+        fn clientFn(server_address: std.net.Address) !void {
+            const socket = try std.net.tcpConnectToAddress(server_address);
+            defer socket.close();
+
+            const reply1 = try utils.send_and_receive("remove hello", socket, std.testing.allocator);
+            defer utils.free_optional(std.testing.allocator, reply1);
+            try std.testing.expectEqualStrings("key removed!", reply1.?);
+        }
+    };
+
+    // scoped thread run so we can continue asserting after the accept.
+    {
+        const t = try std.Thread.spawn(.{}, S.clientFn, .{server.server.listen_address});
+        defer t.join();
+        try server.accept();
+    }
+
+    try std.testing.expectEqual(0, inner.size());
 }

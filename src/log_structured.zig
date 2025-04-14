@@ -9,6 +9,7 @@ pub const LogStructured = struct {
     /// Otherwise we will always compact the file once it reaches the max size with all
     /// unique entries.
     prev_compaction_size: u64,
+    count: usize,
 
     const Self = @This();
 
@@ -34,6 +35,7 @@ pub const LogStructured = struct {
             .index = std.StringHashMap(u64).init(allocator),
             .allocator = allocator,
             .prev_compaction_size = curr_size,
+            .count = 0
         };
         try db.hydrate_db();
 
@@ -94,6 +96,7 @@ pub const LogStructured = struct {
             try std.json.stringify(.{ .key = key, .op = "remove" }, .{}, log.writer());
             _ = try log.write("\n");
             self.allocator.free(entry.key);
+            self.count -= 1;
             try self.compaction();
         }
     }
@@ -110,6 +113,7 @@ pub const LogStructured = struct {
             entry.key_ptr.* = try self.allocator.dupe(u8, key);
         }
         entry.value_ptr.* = try log.getPos();
+        self.count += 1;
 
         try std.json.stringify(.{ .key = key, .value = value, .op = "set" }, .{}, log.writer());
         _ = try log.write("\n");
@@ -117,6 +121,7 @@ pub const LogStructured = struct {
     }
 
     fn hydrate_db(self: *Self) !void {
+        self.count = 0;
         var log = try self.logs_dir.openFile(log_file, .{});
         defer log.close();
 
@@ -143,6 +148,7 @@ pub const LogStructured = struct {
                 entry.key_ptr.* = try self.allocator.dupe(u8, parsed.value.key);
             }
             entry.value_ptr.* = current_line_start;
+            self.count += 1;
 
             current_line_start += line.len + 1;
         }
@@ -185,6 +191,12 @@ pub const LogStructured = struct {
         }
 
         self.index.deinit();
+        self.count = 0;
+    }
+
+    /// number items in the db
+    pub fn size(self: Self) usize {
+        return self.count;
     }
 };
 
@@ -346,37 +358,3 @@ test "get value that does not exist should return null" {
 
     try std.testing.expectEqual(null, store.get("doesnotexist"));
 }
-
-// test "run command: get" {
-//     const localhost = try std.net.Address.parseIp("127.0.0.1", 54321);
-//     var server = try localhost.listen(.{ .reuse_address = true });
-//     defer server.deinit();
-//
-//     const S = struct {
-//         fn clientFn(server_address: std.net.Address) !void {
-//             const socket = try std.net.tcpConnectToAddress(server_address);
-//             defer socket.close();
-//
-//             var tmp = std.testing.tmpDir(.{});
-//             defer tmp.cleanup();
-//             var store = try LogStructured.init(tmp.dir, std.testing.allocator);
-//             defer store.deinit();
-//
-//             try store.set("hello", "world");
-//
-//             const cmd = [_][]const u8{ "get", "hello" };
-//             try store.run_command(&cmd, socket);
-//         }
-//     };
-//
-//     const t = try std.Thread.spawn(.{}, S.clientFn, .{server.listen_address});
-//     defer t.join();
-//
-//     var client = try server.accept();
-//     defer client.stream.close();
-//
-//     var buf: [5]u8 = undefined;
-//     _ = try client.stream.reader().read(&buf);
-//
-//     try std.testing.expectEqualSlices(u8, "world", buf[0..]);
-// }
