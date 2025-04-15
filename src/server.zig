@@ -2,18 +2,30 @@ const std = @import("std");
 const log = @import("log_structured.zig");
 const utils = @import("utils.zig");
 
+pub const Options = struct {
+    thread_pool: ?*std.Thread.Pool = null,
+};
+
 /// Write msg to socket with tries
 pub const DbServer = struct {
     db: *log.LogStructured,
     server: std.net.Server,
     allocator: std.mem.Allocator,
+    thread_pool: ?*std.Thread.Pool,
+    wait_group: std.Thread.WaitGroup,
 
     const Self = @This();
 
-    pub fn init(db: *log.LogStructured, host: std.net.Address, allocator: std.mem.Allocator) !DbServer {
+    pub fn init(db: *log.LogStructured, host: std.net.Address, allocator: std.mem.Allocator, options: Options) !DbServer {
         const server = try host.listen(.{ .reuse_address = true });
 
-        const store_server = DbServer{ .db = db, .server = server, .allocator = allocator };
+        const store_server = DbServer{
+            .db = db,
+            .server = server,
+            .allocator = allocator,
+            .thread_pool = options.thread_pool,
+            .wait_group = .{},
+        };
 
         return store_server;
     }
@@ -42,14 +54,12 @@ pub const DbServer = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.wait_group.wait();
         self.server.deinit();
     }
 
-    pub fn accept(self: *Self) !void {
-        var client = try self.server.accept();
-        defer client.stream.close();
-
-        const line_opt = try utils.read(client.stream, self.allocator);
+    fn handle(self: *Self, conn: std.net.Server.Connection) !void {
+        const line_opt = try utils.read(conn.stream, self.allocator);
         defer utils.free_optional(self.allocator, line_opt);
 
         if (line_opt) |line| {
@@ -70,7 +80,33 @@ pub const DbServer = struct {
             const slice = try commands.toOwnedSlice();
             defer self.allocator.free(slice);
 
-            try self.run_command(slice, client.stream);
+            try self.run_command(slice, conn.stream);
+        }
+    }
+
+    pub fn accept(self: *Self) !void {
+        var client = try self.server.accept();
+        defer client.stream.close();
+        try self.handle(client);
+    }
+
+    pub fn start(self: *Self) !void {
+        while (true) {
+            const conn = self.server.accept() catch |err| {
+                std.log.err("accept error: {?}", .{err});
+
+                continue;
+            };
+
+            self.thread_pool.?.spawnWgId(&self.wait_group, struct {
+                fn run(id: usize, s: *DbServer, connection: std.net.Server.Connection) void {
+                    defer connection.stream.close();
+                    std.log.debug("[thread {d}] connection started.", .{id});
+                    s.handle(connection) catch |err| {
+                        std.log.err("error handling request: {any}", .{err});
+                    };
+                }
+            }.run, .{ self, conn });
         }
     }
 };
@@ -86,7 +122,7 @@ test "server can receive requests" {
 
     try inner.set("hello", "world");
 
-    var server = try DbServer.init(&inner, localhost, std.testing.allocator);
+    var server = try DbServer.init(&inner, localhost, std.testing.allocator, .{});
     defer server.deinit();
 
     const command = "can you be reached?";
@@ -123,7 +159,7 @@ test "run command: get" {
 
     try inner.set("hello", "world");
 
-    var server = try DbServer.init(&inner, localhost, std.testing.allocator);
+    var server = try DbServer.init(&inner, localhost, std.testing.allocator, .{});
     defer server.deinit();
 
     const S = struct {
@@ -159,7 +195,7 @@ test "run command: set" {
 
     try std.testing.expectEqual(0, inner.size());
 
-    var server = try DbServer.init(&inner, localhost, std.testing.allocator);
+    var server = try DbServer.init(&inner, localhost, std.testing.allocator, .{});
     defer server.deinit();
 
     const S = struct {
@@ -196,7 +232,7 @@ test "run command: remove" {
     defer inner.deinit();
     try inner.set("hello", "this is a new value");
 
-    var server = try DbServer.init(&inner, localhost, std.testing.allocator);
+    var server = try DbServer.init(&inner, localhost, std.testing.allocator, .{});
     defer server.deinit();
 
     const S = struct {

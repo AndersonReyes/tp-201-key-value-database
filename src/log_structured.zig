@@ -20,6 +20,8 @@ pub const LogStructured = struct {
     const LogEntry = struct { key: []const u8, value: ?[]const u8 = null, op: []const u8 };
     const max_row_size: usize = 1024; // 1mb row size (key + value)
 
+    var lock: std.Thread.RwLock = .{};
+
     pub fn init(db_dir: std.fs.Dir, allocator: std.mem.Allocator) !LogStructured {
         db_dir.makeDir("logs") catch |err| switch (err) {
             error.PathAlreadyExists => {},
@@ -30,13 +32,7 @@ pub const LogStructured = struct {
         _ = try logs_dir.createFile(log_file, .{ .truncate = false, .exclusive = false });
         const curr_size = (try (try logs_dir.openFile("current.ndjson", .{})).stat()).size;
 
-        var db = LogStructured{
-            .logs_dir = logs_dir,
-            .index = std.StringHashMap(u64).init(allocator),
-            .allocator = allocator,
-            .prev_compaction_size = curr_size,
-            .count = 0
-        };
+        var db = LogStructured{ .logs_dir = logs_dir, .index = std.StringHashMap(u64).init(allocator), .allocator = allocator, .prev_compaction_size = curr_size, .count = 0 };
         try db.hydrate_db();
 
         return db;
@@ -73,9 +69,9 @@ pub const LogStructured = struct {
 
                 var buf_reader = std.io.bufferedReader(old_log.reader());
                 const reader = buf_reader.reader();
-                var buf: [1024]u8 = undefined;
 
-                if (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
+                if (try reader.readUntilDelimiterOrEofAlloc(self.allocator, '\n', 1024)) |line| {
+                    defer self.allocator.free(line);
                     _ = try new_log.write(line);
                     _ = try new_log.write("\n");
                 }
@@ -88,6 +84,9 @@ pub const LogStructured = struct {
 
     /// remove key from the store. Returns boolean if key exist and it was removed
     pub fn remove(self: *Self, key: []const u8) !void {
+        lock.lock();
+        defer lock.unlock();
+
         var log = try self.logs_dir.openFile(log_file, .{ .mode = std.fs.File.OpenMode.write_only });
         defer log.close();
         try log.seekFromEnd(0);
@@ -104,6 +103,8 @@ pub const LogStructured = struct {
     /// put a key in the store
     pub fn set(self: *Self, key: []const u8, value: []const u8) !void {
         // var log = try self.logs_dir.createFile(log_file, .{ .truncate = false, .exclusive = false });
+        lock.lock();
+        defer lock.unlock();
         var log = try self.logs_dir.openFile(log_file, .{ .mode = std.fs.File.OpenMode.write_only });
         defer log.close();
         try log.seekFromEnd(0);
@@ -133,8 +134,8 @@ pub const LogStructured = struct {
         var buf_reader = std.io.bufferedReader(log.reader());
         const reader = buf_reader.reader();
 
-        var buf: [1024]u8 = undefined;
-        while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
+        while (try reader.readUntilDelimiterOrEofAlloc(self.allocator, '\n', 1024)) |line| {
+            defer self.allocator.free(line);
             const parsed = try std.json.parseFromSlice(LogEntry, self.allocator, line, .{});
             defer parsed.deinit();
 
@@ -157,7 +158,9 @@ pub const LogStructured = struct {
     /// retrieve a key from the store. caller owns the memory of
     /// the returned value.
     pub fn get(self: Self, key: []const u8) !?[]const u8 {
+        lock.lockShared();
         const offset = self.index.get(key);
+        lock.unlockShared();
 
         if (offset != null) {
             var log = try self.logs_dir.openFile(log_file, .{});
@@ -167,9 +170,8 @@ pub const LogStructured = struct {
 
             const reader = log.reader();
 
-            var buf: [1024]u8 = undefined;
-
-            if (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
+            if (try reader.readUntilDelimiterOrEofAlloc(self.allocator, '\n', 1024)) |line| {
+                defer self.allocator.free(line);
                 const parsed = try std.json.parseFromSlice(LogEntry, self.allocator, line, .{});
                 defer parsed.deinit();
 

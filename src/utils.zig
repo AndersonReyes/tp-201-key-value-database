@@ -20,12 +20,12 @@ pub fn free_optional(allocator: std.mem.Allocator, opt: ?[]const u8) void {
 
 /// send a message, wait for reply but discard the reply
 pub fn send(msg: []const u8, socket: std.net.Stream, allocator: std.mem.Allocator) !void {
-    _  = try write(msg, socket, allocator);
+    _ = try write(msg, socket, allocator);
     free_optional(allocator, try read(socket, allocator));
 }
 
 /// send a message, wait for reply and return the reply. caller owns the memory
-pub fn send_and_receive(msg: []const u8, socket: std.net.Stream, allocator: std.mem.Allocator) !?[]u8{
-    _  = try write(msg, socket, allocator);
+pub fn send_and_receive(msg: []const u8, socket: std.net.Stream, allocator: std.mem.Allocator) !?[]u8 {
+    _ = try write(msg, socket, allocator);
     return try read(socket, allocator);
 }
